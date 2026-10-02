@@ -1,0 +1,6 @@
+{
+  "name": "LeadForge",
+  "description": "B2B lead generation and digital audit platform for identifying verified business opportunities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
