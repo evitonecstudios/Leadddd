@@ -4,8 +4,16 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   try {
     console.log(`[VERCEL-HANDLER] Handling request: ${req.method} ${req.url}`);
     
-    // Use explicit extension to help Vercel's bundler resolve the module correctly in ESM mode
-    const { app } = await import('../server.ts');
+    // Diagnostic: Check if the target file actually exists before importing
+    const fs = await import('fs');
+    const path = await import('path');
+    const targetPath = path.resolve(process.cwd(), 'src/app.ts');
+    const exists = fs.existsSync(targetPath);
+    console.log(`[VERCEL-HANDLER] Checking for app.ts at ${targetPath}: ${exists ? 'EXISTS' : 'MISSING'}`);
+
+    // Lazy import from the source tree to ensure Vercel includes it in the bundle
+    const { createServerApp } = await import('../src/app.ts');
+    const app = createServerApp();
 
     if (!app) {
       throw new Error('Express app failed to initialize correctly (app is undefined).');

@@ -19,7 +19,7 @@ import { EnrichmentBot } from './services/enrichmentBot';
 import { SocialEnrichmentService } from './services/socialEnrichmentService';
 import { db } from './db/index';
 import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './db/schema';
-import { eq, and, sql, desc, isNull, isNotNull, ilike, or, gt, lt } from 'drizzle-orm';
+import { eq, and, sql, desc, isNull, isNotNull, ilike, or, gt, lt, ne } from 'drizzle-orm';
 import Papa from 'papaparse';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,21 +49,25 @@ export function createServerApp() {
     try {
       const { checkDbHealth } = await import('./db/index');
       const dbStatus = await checkDbHealth();
+      
+      console.log('[DEBUG-DB] Explicit Diagnostics Triggered');
+      console.log('[DEBUG-DB] Status:', dbStatus.success ? 'CONNECTED' : 'FAILED');
+      console.log('[DEBUG-DB] URL Pattern:', dbStatus.diagnostics?.urlPattern);
+      if (!dbStatus.success) {
+        console.error('[DEBUG-DB] Error:', dbStatus.error);
+      }
+      if (dbStatus.diagnostics?.mismatches?.length) {
+        console.warn('[DEBUG-DB] Configuration Mismatches:', dbStatus.diagnostics.mismatches);
+      }
+
       res.json({
         success: dbStatus.success,
-        diagnostics: {
-          connected: dbStatus.connected,
-          fullyProvisioned: dbStatus.fullyProvisioned,
-          tables: dbStatus.tables,
-          error: dbStatus.error,
-          code: dbStatus.code,
-          config: {
-            hasDatabaseUrl: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
-            urlPrefix: (process.env.DATABASE_URL || process.env.POSTGRES_URL)?.substring(0, 15),
-            urlSuffix: (process.env.DATABASE_URL || process.env.POSTGRES_URL)?.slice(-10),
-            nodeEnv: process.env.NODE_ENV
-          }
-        }
+        connected: dbStatus.connected,
+        fullyProvisioned: dbStatus.fullyProvisioned,
+        tables: dbStatus.tables,
+        error: dbStatus.error,
+        code: dbStatus.code,
+        diagnostics: dbStatus.diagnostics
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -167,7 +171,7 @@ export function createServerApp() {
       if (maxOppScore) conditions.push(lt(leads.opportunityScore, parseInt(maxOppScore as string)));
       
       if (hasWebsite === 'true') {
-        conditions.push(and(isNotNull(leads.website), sql`${leads.website} != ''`) as any);
+        conditions.push(and(isNotNull(leads.website), ne(leads.website, '')) as any);
       } else if (hasWebsite === 'false') {
         conditions.push(or(isNull(leads.website), eq(leads.website, '')) as any);
       }
