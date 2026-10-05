@@ -4,7 +4,8 @@ import {
   Upload, Check, AlertCircle, Loader2, Globe, Phone, Mail, MapPin, ExternalLink, 
   RefreshCw, Star, Info, Lightbulb, MessageSquare, Linkedin, Languages, Wand2, 
   ShieldCheck, Copy, History, Calendar, Plus, Trash2, Download, MoreVertical,
-  ChevronRight, ArrowRight, User, CheckCircle2, Clock, Menu, X, PanelLeftClose, PanelLeftOpen
+  ChevronRight, ArrowRight, User, CheckCircle2, Clock, Menu, X, PanelLeftClose, PanelLeftOpen,
+  Facebook, Instagram, Twitter, Sparkles, Share2
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
 import { cn, formatDate } from './lib/utils.ts';
@@ -15,6 +16,16 @@ const parseApiResponse = async (res: Response) => {
   const contentType = res.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
     const text = await res.text();
+    
+    // Detect if we received the environment's "Starting Server" loading page
+    if (text.includes('<title>Starting Server...</title>') || text.includes('Server is starting')) {
+      return { 
+        success: false, 
+        isRetryable: true,
+        error: 'SERVER_BOOTING'
+      };
+    }
+
     console.error(`Non-JSON response received (${res.status}):`, text.slice(0, 200));
     return { 
       success: false, 
@@ -32,50 +43,97 @@ const parseApiResponse = async (res: Response) => {
   }
 };
 
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const api = {
-  get: async (url: string, token: string) => {
+  get: async (url: string, token: string, retries = 3): Promise<any> => {
     try {
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      return await parseApiResponse(res);
+      const parsed = await parseApiResponse(res);
+      
+      if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
+        console.warn(`[API] Server is booting, retrying in 2s... (${retries} left)`);
+        await wait(2000);
+        return api.get(url, token, retries - 1);
+      }
+      
+      return parsed;
     } catch (err: any) {
+      if (retries > 0) {
+        await wait(2000);
+        return api.get(url, token, retries - 1);
+      }
       console.error("Network Error:", err);
       return { success: false, error: err.message };
     }
   },
-  post: async (url: string, data: any, token: string) => {
+  post: async (url: string, data: any, token: string, retries = 3): Promise<any> => {
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(data),
       });
-      return await parseApiResponse(res);
+      const parsed = await parseApiResponse(res);
+
+      if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
+        await wait(2000);
+        return api.post(url, data, token, retries - 1);
+      }
+
+      return parsed;
     } catch (err: any) {
+      if (retries > 0) {
+        await wait(2000);
+        return api.post(url, data, token, retries - 1);
+      }
       console.error("Network Error:", err);
       return { success: false, error: err.message };
     }
   },
-  patch: async (url: string, data: any, token: string) => {
+  patch: async (url: string, data: any, token: string, retries = 3): Promise<any> => {
     try {
       const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(data),
       });
-      return await parseApiResponse(res);
+      const parsed = await parseApiResponse(res);
+
+      if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
+        await wait(2000);
+        return api.patch(url, data, token, retries - 1);
+      }
+
+      return parsed;
     } catch (err: any) {
+      if (retries > 0) {
+        await wait(2000);
+        return api.patch(url, data, token, retries - 1);
+      }
       console.error("Network Error:", err);
       return { success: false, error: err.message };
     }
   },
-  delete: async (url: string, token: string) => {
+  delete: async (url: string, token: string, retries = 3): Promise<any> => {
     try {
       const res = await fetch(url, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
-      return await parseApiResponse(res);
+      const parsed = await parseApiResponse(res);
+
+      if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
+        await wait(2000);
+        return api.delete(url, token, retries - 1);
+      }
+
+      return parsed;
     } catch (err: any) {
+      if (retries > 0) {
+        await wait(2000);
+        return api.delete(url, token, retries - 1);
+      }
       console.error("Network Error:", err);
       return { success: false, error: err.message };
     }
@@ -116,7 +174,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 function AppContent() {
   console.log("AppContent rendering...");
-  const { user, loading, authError, signIn, logout } = useAuth();
+  const { user, loading, authError, authErrorCode, signIn, logout } = useAuth();
+  const [copiedDomain, setCopiedDomain] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -174,16 +233,69 @@ function AppContent() {
             <p className="text-lg text-slate-600 leading-relaxed">Identity verified B2B opportunities with data-driven digital audits.</p>
           </div>
           
-          {authError && (
-            <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3 text-left">
-              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <p className="text-sm font-bold text-red-900 tracking-tight">Sign-in failed</p>
-                <p className="text-xs text-red-600 leading-relaxed font-medium">{authError}</p>
-                <p className="text-[10px] text-red-400 font-bold uppercase tracking-widest pt-1">Please verify that this domain is authorized in Firebase.</p>
+          {authError && (() => {
+            const isUnauthorizedDomain = authErrorCode === 'auth/unauthorized-domain' || authError?.includes('unauthorized-domain');
+            const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
+            return (
+              <div className="p-5 bg-amber-50/90 border border-amber-200/90 rounded-2xl text-left space-y-4 shadow-sm animate-in fade-in">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold text-amber-950 tracking-tight">
+                      {isUnauthorizedDomain ? 'Action Required: Authorize Domain in Firebase' : 'Sign-in failed'}
+                    </p>
+                    <p className="text-xs text-amber-800 leading-relaxed font-medium">{authError}</p>
+                  </div>
+                </div>
+
+                {isUnauthorizedDomain && (
+                  <div className="pt-3 border-t border-amber-200/80 space-y-3">
+                    <div className="bg-white p-3 rounded-xl border border-amber-200 flex items-center justify-between gap-3 shadow-xs">
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Domain to Whitelist</p>
+                        <p className="text-xs font-mono font-bold text-slate-900 truncate">{currentDomain}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (currentDomain) {
+                            navigator.clipboard.writeText(currentDomain);
+                            setCopiedDomain(true);
+                            setTimeout(() => setCopiedDomain(false), 2000);
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-slate-800 transition-all shrink-0 active:scale-95"
+                      >
+                        {copiedDomain ? '✓ Copied' : 'Copy Domain'}
+                      </button>
+                    </div>
+
+                    <div className="text-[11px] text-slate-700 space-y-2">
+                      <p className="font-bold text-slate-900">How to fix in 30 seconds:</p>
+                      <ol className="list-decimal list-inside space-y-1.5 text-slate-600 leading-relaxed pl-0.5">
+                        <li>
+                          Open{' '}
+                          <a 
+                            href="https://console.firebase.google.com/project/majestic-safeguard-nvr20/authentication/settings" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-600 font-bold underline hover:text-blue-800 inline-flex items-center gap-1"
+                          >
+                            Firebase Console &rarr; Authorized Domains
+                          </a>
+                        </li>
+                        <li>Click <strong className="text-slate-900 font-bold">Add domain</strong></li>
+                        <li>
+                          Paste <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">{currentDomain}</code> (or <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">vercel.app</code> to cover all Vercel deploys) and click <strong className="text-slate-900 font-bold">Save</strong>
+                        </li>
+                        <li>Click the button below to sign in</li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           <button onClick={signIn} className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98]">
             Sign in with Google
@@ -495,15 +607,36 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
     }
   }, [token]);
 
-  if (error) return (
-    <div className="p-12 text-center space-y-4">
-      <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mx-auto">
-        <AlertCircle className="w-6 h-6 text-red-600" />
+  if (error) {
+    const isDbIssue = error.toLowerCase().includes('database') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('password') || error.toLowerCase().includes('socket') || error.toLowerCase().includes('enotfound');
+    return (
+      <div className="max-w-md mx-auto p-8 my-12 bg-white rounded-2xl border border-slate-200 shadow-sm text-center space-y-4 animate-in fade-in">
+        <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center mx-auto text-red-600 shadow-sm">
+          <AlertCircle className="w-6 h-6" />
+        </div>
+        <div className="space-y-1">
+          <h3 className="text-sm font-bold text-slate-900 tracking-tight">Dashboard Connection Error</h3>
+          <p className="text-xs text-slate-500 font-medium leading-relaxed">{error}</p>
+        </div>
+        {isDbIssue && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-left text-[11px] text-amber-900 space-y-1">
+            <p className="font-bold">Database Setup Notice for Vercel:</p>
+            <p className="leading-relaxed text-amber-800">
+              Ensure your Vercel project has <code className="bg-amber-100 font-mono font-bold px-1 rounded">DATABASE_URL</code> or <code className="bg-amber-100 font-mono font-bold px-1 rounded">POSTGRES_URL</code> configured in <strong>Project Settings &rarr; Environment Variables</strong>.
+            </p>
+          </div>
+        )}
+        <div className="pt-2">
+          <button 
+            onClick={() => window.location.reload()} 
+            className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-colors shadow-sm"
+          >
+            Retry Connection
+          </button>
+        </div>
       </div>
-      <p className="text-sm font-medium text-slate-600">{error}</p>
-      <button onClick={() => window.location.reload()} className="text-xs font-bold text-slate-900 uppercase tracking-widest border-b border-slate-900 pb-0.5">Retry Connection</button>
-    </div>
-  );
+    );
+  }
 
   if (!stats) return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>;
 
@@ -1254,6 +1387,7 @@ function LeadsView({ token, onSelectLead }: any) {
 function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: string; onBack: () => void }) {
   const [lead, setLead] = useState<any>(null);
   const [auditing, setAuditing] = useState(false);
+  const [scraping, setScraping] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [activeTab, setActiveTab] = useState<'crm' | 'evidence' | 'audit' | 'ai'>('crm');
   
@@ -1271,6 +1405,16 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
     setActiveTab('audit');
   };
 
+  const runScrape = async () => {
+    setScraping(true);
+    const res = await api.post(`/api/leads/${leadId}/scrape`, {}, token);
+    if (res.success && res.data) {
+      setLead(res.data);
+    }
+    setScraping(false);
+    setActiveTab('evidence');
+  };
+
   const handleStatusChange = async (status: string) => {
     await api.patch(`/api/leads/${leadId}/status`, { status }, token);
     await fetchLead();
@@ -1280,7 +1424,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <button onClick={onBack} className="text-[10px] font-bold text-slate-400 hover:text-slate-900 flex items-center gap-2 uppercase tracking-[0.2em] transition-colors">
           <ArrowRight className="w-3 h-3 rotate-180" /> Back to Database
         </button>
@@ -1293,6 +1437,15 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
           >
             {['NEW', 'REVIEWED', 'QUALIFIED', 'CONTACTED', 'REPLIED', 'MEETING', 'PROPOSAL', 'WON', 'LOST', 'DISMISSED'].map(s => <option key={s} value={s}>{s}</option>)}
           </select>
+          <button 
+            disabled={scraping}
+            onClick={runScrape}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 shadow-sm transition-all"
+            title="Scrape and extract maximum verified website and social media information"
+          >
+            {scraping ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+            {scraping ? 'Extracting...' : 'Deep Scrape & Extract'}
+          </button>
           <button 
             disabled={auditing}
             onClick={runAudit}
@@ -1312,22 +1465,41 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
               <h3 className="text-xl font-bold text-slate-900">{lead.companyName}</h3>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{lead.category}</p>
             </div>
+
+            {lead.websiteStatus === 'social_profile' && (
+              <div className="p-3 bg-indigo-50/80 border border-indigo-100 rounded-xl space-y-1">
+                <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-xs">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" /> Social Presence Verified
+                </div>
+                <p className="text-[10px] text-indigo-900/80 leading-relaxed font-medium">
+                  No standard website found. Primary digital identity extracted directly from official social media.
+                </p>
+              </div>
+            )}
             
             <div className="space-y-4">
               <div className="flex items-start gap-3">
-                <MapPin className="w-4 h-4 text-slate-300 shrink-0" />
+                <MapPin className="w-4 h-4 text-slate-300 shrink-0 mt-0.5" />
                 <span className="text-xs font-medium text-slate-600">{lead.address || 'Loc. Unknown'}, {lead.city}, {lead.country}</span>
               </div>
               {lead.phone && (
                 <div className="flex items-center gap-3">
                   <Phone className="w-4 h-4 text-slate-300 shrink-0" />
-                  <span className="text-xs font-bold text-slate-600">{lead.phone}</span>
+                  <a href={`tel:${lead.phone}`} className="text-xs font-bold text-slate-700 hover:text-slate-900 truncate">{lead.phone}</a>
+                </div>
+              )}
+              {lead.email && (
+                <div className="flex items-center gap-3">
+                  <Mail className="w-4 h-4 text-slate-300 shrink-0" />
+                  <a href={`mailto:${lead.email}`} className="text-xs font-bold text-blue-600 hover:underline truncate">
+                    {lead.email}
+                  </a>
                 </div>
               )}
               {lead.website && (
                 <div className="flex items-center gap-3 overflow-hidden">
                   <Globe className="w-4 h-4 text-slate-300 shrink-0" />
-                  <a href={lead.website} target="_blank" className="text-xs font-bold text-blue-600 hover:underline truncate">
+                  <a href={lead.website} target="_blank" rel="noreferrer" className="text-xs font-bold text-blue-600 hover:underline truncate">
                     {lead.website.replace(/^https?:\/\//, '')}
                   </a>
                 </div>
@@ -1340,7 +1512,44 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
               )}
             </div>
 
-            <div className="pt-6 border-t border-slate-50 flex items-center justify-between text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+            {/* Discovered Social Media Profiles */}
+            {(() => {
+              const socialFields = ['facebook', 'instagram', 'linkedin', 'twitter', 'tiktok', 'youtube'];
+              const foundSocials = (lead.evidence || []).filter((e: any) => socialFields.includes(e.fieldName?.toLowerCase()));
+              if (foundSocials.length === 0) return null;
+
+              return (
+                <div className="space-y-2 pt-4 border-t border-slate-100">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Social Media Channels</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {foundSocials.map((s: any) => {
+                      const name = s.fieldName.toLowerCase();
+                      return (
+                        <a
+                          key={s.id || s.value}
+                          href={s.value}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-semibold text-slate-700 transition-colors shadow-2xs"
+                        >
+                          {name === 'facebook' && <Facebook className="w-3 h-3 text-blue-600" />}
+                          {name === 'instagram' && <Instagram className="w-3 h-3 text-pink-600" />}
+                          {name === 'linkedin' && <Linkedin className="w-3 h-3 text-blue-700" />}
+                          {name === 'twitter' && <Twitter className="w-3 h-3 text-sky-500" />}
+                          {name !== 'facebook' && name !== 'instagram' && name !== 'linkedin' && name !== 'twitter' && (
+                            <Share2 className="w-3 h-3 text-slate-500" />
+                          )}
+                          <span className="capitalize">{name}</span>
+                          <ExternalLink className="w-2.5 h-2.5 text-slate-400" />
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="pt-4 border-t border-slate-50 flex items-center justify-between text-[9px] font-bold text-slate-400 uppercase tracking-widest">
               <span className="flex items-center gap-1.5"><Database className="w-2.5 h-2.5" /> {lead.source}</span>
               <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{lead.dataConfidence}</span>
             </div>
@@ -1967,63 +2176,132 @@ function ReviewSection({ entityId, entityType, token }: { entityId: number; enti
 
 function EvidenceTab({ lead }: { lead: any }) {
   const evidenceList = lead.evidence || [];
+  const [filterCategory, setFilterCategory] = useState<string>('all');
+
+  const contactFields = ['phone', 'email', 'whatsapp'];
+  const socialFields = ['facebook', 'instagram', 'linkedin', 'twitter', 'tiktok', 'youtube', 'pinterest'];
+  const locationFields = ['address', 'opening_hours'];
+  const legalFields = ['legal_id', 'legal_name', 'manager', 'tagline', 'social_bio'];
+
+  const filteredEvidence = evidenceList.filter((ev: any) => {
+    if (filterCategory === 'all') return true;
+    const name = ev.fieldName?.toLowerCase() || '';
+    if (filterCategory === 'contact') return contactFields.includes(name);
+    if (filterCategory === 'social') return socialFields.includes(name) || ev.source?.includes('SOCIAL') || ev.source?.includes('FACEBOOK') || ev.source?.includes('INSTAGRAM');
+    if (filterCategory === 'location') return locationFields.includes(name);
+    if (filterCategory === 'legal') return legalFields.includes(name);
+    return true;
+  });
+
+  const socialCount = evidenceList.filter((ev: any) => socialFields.includes(ev.fieldName?.toLowerCase()) || ev.source?.includes('SOCIAL') || ev.source?.includes('FACEBOOK') || ev.source?.includes('INSTAGRAM')).length;
+  const contactCount = evidenceList.filter((ev: any) => contactFields.includes(ev.fieldName?.toLowerCase())).length;
 
   return (
     <div className="space-y-6">
-      <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-xl shadow-slate-900/10 space-y-3">
-        <div className="flex items-center gap-2 text-emerald-400">
-          <ShieldCheck className="w-5 h-5" />
-          <h4 className="text-xs font-bold uppercase tracking-wider">Data Provenance & Zero-Fabrication Guarantee</h4>
+      <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-xl shadow-slate-900/10 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2.5 text-emerald-400">
+            <ShieldCheck className="w-5 h-5 shrink-0" />
+            <h4 className="text-xs font-bold uppercase tracking-wider">Zero-Fabrication & Data Provenance Guarantee</h4>
+          </div>
+          <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-lg text-[10px] font-mono font-bold tracking-wide">
+            100% REAL PUBLIC DATA
+          </span>
         </div>
         <p className="text-xs text-slate-300 leading-relaxed">
-          Every field value below was deterministically extracted from official public sources or the business’s verified web presence. LeadForge never synthesizes or guesses phone numbers, emails, or company details.
+          Every field value below was deterministically extracted from the official website, public social media profile, or OpenStreetMap record. <strong>LeadForge strictly prohibits fake, simulated, or invented contact details.</strong> If an email or phone is not publicly declared by the business, it remains empty (<code className="text-slate-400 font-mono">null</code>).
         </p>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-white/10 text-center">
+          <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Verified Fields</span>
+            <span className="text-base font-black text-white">{evidenceList.length}</span>
+          </div>
+          <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Contact Points</span>
+            <span className="text-base font-black text-emerald-400">{contactCount}</span>
+          </div>
+          <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Social Channels</span>
+            <span className="text-base font-black text-indigo-400">{socialCount}</span>
+          </div>
+          <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Fabricated Data</span>
+            <span className="text-base font-black text-emerald-400">0%</span>
+          </div>
+        </div>
       </div>
 
-      {/* Website Identity Status Card */}
+      {/* Website & Social Presence Identity Card */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Website Discovery & Validation</h4>
+        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Presence Discovery & Channel Status</h4>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Current Status</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Channel Status</span>
             <span className={cn("text-xs font-extrabold uppercase px-2 py-0.5 rounded inline-block",
               lead.websiteStatus === 'verified' ? 'bg-emerald-100 text-emerald-800' :
+              lead.websiteStatus === 'social_profile' ? 'bg-indigo-100 text-indigo-800' :
               lead.websiteStatus === 'unreachable' ? 'bg-red-100 text-red-800' :
               lead.websiteStatus === 'not_detected' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-            )}>{lead.websiteStatus || 'unknown'}</span>
+            )}>{lead.websiteStatus === 'social_profile' ? 'Social Presence Only' : (lead.websiteStatus || 'unknown')}</span>
           </div>
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Confidence</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Confidence Rating</span>
             <span className="text-xs font-bold text-slate-800">{lead.websiteConfidence || lead.dataConfidence || 'UNKNOWN'}</span>
           </div>
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Discovery Source</span>
-            <span className="text-xs font-medium text-slate-700 truncate block">{lead.discoverySource || lead.source || 'OpenStreetMap'}</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Enrichment Source</span>
+            <span className="text-xs font-medium text-slate-700 truncate block">{lead.enrichmentSource || lead.discoverySource || lead.source || 'OpenStreetMap'}</span>
           </div>
         </div>
 
-        {lead.websiteCandidate && (
-          <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 text-xs text-blue-900 flex items-center justify-between">
-            <span className="font-medium">Candidate URL: <code className="bg-white px-1.5 py-0.5 rounded border border-blue-200 font-mono text-[11px]">{lead.websiteCandidate}</code></span>
-            <a href={lead.websiteCandidate} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-bold text-[11px]">
-              Visit <ExternalLink className="w-3 h-3" />
+        {lead.website && (
+          <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 text-xs text-blue-900 flex items-center justify-between flex-wrap gap-2">
+            <span className="font-medium">
+              {lead.websiteStatus === 'social_profile' ? 'Verified Social Presence URL:' : 'Audited Website URL:'} <code className="bg-white px-1.5 py-0.5 rounded border border-blue-200 font-mono text-[11px]">{lead.website}</code>
+            </span>
+            <a href={lead.website} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-bold text-[11px]">
+              Open Source <ExternalLink className="w-3 h-3" />
             </a>
           </div>
         )}
       </div>
 
-      {/* Field Evidence Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+      {/* Field Evidence Table with Filter Tabs */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between flex-wrap gap-4">
           <div>
-            <h4 className="text-sm font-bold text-slate-900">Extracted Field Evidence ({evidenceList.length})</h4>
-            <p className="text-xs text-slate-500">Audit trail of verified data points extracted for this business.</p>
+            <h4 className="text-sm font-bold text-slate-900">Extracted Real Facts ({filteredEvidence.length})</h4>
+            <p className="text-xs text-slate-500">Every record is backed by an exact URL and method extraction proof.</p>
+          </div>
+
+          <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+            {[
+              { id: 'all', label: `All (${evidenceList.length})` },
+              { id: 'contact', label: `Contact (${contactCount})` },
+              { id: 'social', label: `Social Media (${socialCount})` },
+              { id: 'location', label: 'Location & Hours' },
+              { id: 'legal', label: 'Legal & Bio' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setFilterCategory(tab.id)}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all",
+                  filterCategory === tab.id 
+                    ? "bg-white text-slate-900 shadow-xs" 
+                    : "text-slate-500 hover:text-slate-900"
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {evidenceList.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 text-xs">
-            No specific field evidence records found for this entry yet.
+        {filteredEvidence.length === 0 ? (
+          <div className="p-12 text-center text-slate-400 text-xs">
+            No field evidence recorded for this category yet. Click <strong>Deep Scrape & Extract</strong> above to crawl the site or social presence.
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -2032,27 +2310,28 @@ function EvidenceTab({ lead }: { lead: any }) {
                 <tr>
                   <th className="px-6 py-3">Field</th>
                   <th className="px-6 py-3">Verified Value</th>
-                  <th className="px-6 py-3">Source & Method</th>
+                  <th className="px-6 py-3">Extraction Method & Source</th>
                   <th className="px-6 py-3">Confidence</th>
-                  <th className="px-6 py-3">Source URL</th>
+                  <th className="px-6 py-3">Public Source URL</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {evidenceList.map((ev: any) => (
-                  <tr key={ev.id} className="hover:bg-slate-50">
+                {filteredEvidence.map((ev: any) => (
+                  <tr key={ev.id || `${ev.fieldName}-${ev.value}`} className="hover:bg-slate-50">
                     <td className="px-6 py-3.5 font-bold uppercase text-[10px] text-slate-700 tracking-wider">
                       {ev.fieldName}
                     </td>
-                    <td className="px-6 py-3.5 font-semibold text-slate-900 max-w-[200px] truncate">
+                    <td className="px-6 py-3.5 font-semibold text-slate-900 max-w-[260px] truncate select-all">
                       {ev.value}
                     </td>
                     <td className="px-6 py-3.5">
-                      <span className="font-medium text-slate-700 block">{ev.source}</span>
+                      <span className="font-medium text-slate-800 block text-xs">{ev.source}</span>
+                      {ev.method && <span className="text-[10px] text-slate-400 block">{ev.method}</span>}
                     </td>
                     <td className="px-6 py-3.5">
                       <span className={cn("px-2 py-0.5 rounded text-[10px] font-extrabold uppercase",
-                        ev.confidence === 'HIGH' ? 'bg-emerald-50 text-emerald-700' :
-                        ev.confidence === 'MEDIUM' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'
+                        ev.confidence === 'HIGH' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/50' :
+                        ev.confidence === 'MEDIUM' ? 'bg-amber-50 text-amber-700 border border-amber-200/50' : 'bg-slate-100 text-slate-600'
                       )}>{ev.confidence}</span>
                     </td>
                     <td className="px-6 py-3.5">
@@ -2076,7 +2355,7 @@ function EvidenceTab({ lead }: { lead: any }) {
       <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 text-xs text-slate-600 space-y-1">
         <p className="font-bold text-slate-800">Why are some fields empty?</p>
         <p className="leading-relaxed">
-          If a business does not publish a direct email or phone on their official website or OpenStreetMap entry, LeadForge keeps the field empty (<code className="text-slate-500 font-mono">null</code>). We do NOT guess generic mailboxes (such as <code className="text-slate-500 font-mono">info@domain.com</code>) unless explicitly listed on their contact page.
+          LeadForge guarantees strict anti-fabrication standards. If a business does not publish a direct email or phone on their official website, social media profile, or OpenStreetMap entry, LeadForge keeps the field empty (<code className="text-slate-500 font-mono">null</code>). We do NOT guess generic mailboxes (such as <code className="text-slate-500 font-mono">info@domain.com</code>) unless explicitly listed by the business.
         </p>
       </div>
     </div>

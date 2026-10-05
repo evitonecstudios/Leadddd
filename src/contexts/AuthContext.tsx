@@ -6,6 +6,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   authError: string | null;
+  authErrorCode: string | null;
   signIn: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -16,6 +17,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
 
   useEffect(() => {
     console.log('[AUTH] Setting up onAuthStateChanged listener');
@@ -30,6 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async () => {
     console.log('[AUTH] signIn called');
     setAuthError(null);
+    setAuthErrorCode(null);
     try {
       console.log('[AUTH] Calling signInWithPopup');
       const result = await signInWithPopup(auth, googleAuthProvider);
@@ -37,6 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error: any) {
       console.error('[AUTH] Sign in failed:', error);
       setAuthError(error.message);
+      setAuthErrorCode(error.code || null);
       if (error.code === 'auth/popup-blocked') {
         console.warn('[AUTH] Popup was blocked by the browser');
       } else if (error.code === 'auth/cancelled-popup-request') {
@@ -58,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, authError, signIn, logout }}>
+    <AuthContext.Provider value={{ user, loading, authError, authErrorCode, signIn, logout }}>
       {children}
     </AuthContext.Provider>
   );

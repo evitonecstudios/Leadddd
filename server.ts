@@ -1,9 +1,10 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as dotenv from 'dotenv';
 import fs from 'fs';
+dotenv.config();
+
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { getOrCreateUser } from './src/db/users.ts';
 import { LeadService } from './src/services/leadService.ts';
@@ -14,21 +15,23 @@ import { OpportunityService } from './src/services/opportunityService.ts';
 import { SearchProviderFactory } from './src/services/search/types.ts';
 import { AIService } from './src/services/aiService.ts';
 import { CRMService, LeadStatus } from './src/services/crmService.ts';
+import { EnrichmentBot } from './src/services/enrichmentBot.ts';
+import { SocialEnrichmentService } from './src/services/socialEnrichmentService.ts';
 import { db } from './src/db/index.ts';
-import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews } from './src/db/schema.ts';
+import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './src/db/schema.ts';
 import { eq, and, sql, desc, isNull, ilike, or, gt, lt } from 'drizzle-orm';
 import Papa from 'papaparse';
 
-dotenv.config();
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
+export function createServerApp() {
   const app = express();
   app.use(express.json());
   app.use('/api', (req, res, next) => {
-    if (req.path === '/health') return next();
+    if (req.path === '/health' || req.path === '/search-providers') return next();
     requireAuth(req as AuthRequest, res, next);
   });
 
@@ -477,6 +480,104 @@ async function startServer() {
     }
   });
 
+  // On-demand Deep Scrape & Social Media Extraction
+  app.post('/api/leads/:id/scrape', async (req: AuthRequest, res) => {
+    try {
+      const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
+      const leadId = parseInt(req.params.id);
+      const lead = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
+      if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
+
+      await CRMService.logActivity(leadId, user.id, 'SCRAPE_STARTED', `Deep web and social extraction started for ${lead.companyName}`, 'USER');
+
+      let evidenceCount = 0;
+      const targetUrl = lead.website;
+
+      // 1. If has website, run deep multi-page crawl
+      if (targetUrl && !targetUrl.includes('facebook.com') && !targetUrl.includes('instagram.com')) {
+        const enriched = await EnrichmentBot.enrich(targetUrl);
+        if (enriched.evidence.length > 0) {
+          evidenceCount += enriched.evidence.length;
+          const evidenceBatch = enriched.evidence.map(e => ({
+            leadId,
+            fieldName: e.field,
+            value: e.value,
+            source: 'OFFICIAL_WEBSITE',
+            sourceUrl: e.url,
+            verified: e.confidence === 'HIGH',
+            confidence: e.confidence
+          }));
+          await db.insert(fieldEvidence).values(evidenceBatch);
+
+          const updateObj: any = { lastEnrichedAt: new Date(), enrichmentSource: 'OFFICIAL_WEBSITE' };
+          if (!lead.phone && enriched.phone) updateObj.phone = enriched.phone;
+          if (!lead.email && enriched.email) updateObj.email = enriched.email;
+          if (!lead.address && enriched.address) updateObj.address = enriched.address;
+
+          const extraNotes: string[] = [];
+          if (enriched.whatsapp) extraNotes.push(`WhatsApp: ${enriched.whatsapp}`);
+          if (enriched.openingHours) extraNotes.push(`Hours: ${enriched.openingHours}`);
+          if (enriched.managerName) extraNotes.push(`Dirigeant/Manager: ${enriched.managerName}`);
+          if (enriched.siretOrVat) extraNotes.push(`Legal ID: ${enriched.siretOrVat}`);
+          if (extraNotes.length > 0) {
+            updateObj.notes = lead.notes ? `${lead.notes}\n${extraNotes.join('\n')}` : extraNotes.join('\n');
+          }
+
+          await db.update(leads).set(updateObj).where(eq(leads.id, leadId));
+        }
+      } else {
+        // 2. No traditional website -> Extract maximum information from Social Media (100% Real data)
+        const rawTags = (lead as any).rawData?.tags || (lead as any).rawData || {};
+        const socialResult = await SocialEnrichmentService.enrichFromSocialMedia(
+          lead.companyName,
+          lead.city || undefined,
+          lead.country || undefined,
+          rawTags
+        );
+
+        if (socialResult.evidence.length > 0) {
+          evidenceCount += socialResult.evidence.length;
+          const evidenceBatch = socialResult.evidence.map(e => ({
+            leadId,
+            fieldName: e.field,
+            value: e.value,
+            source: socialResult.platform ? `${socialResult.platform.toUpperCase()}_PROFILE` : 'SOCIAL_PRESENCE',
+            sourceUrl: e.url,
+            verified: e.confidence === 'HIGH',
+            confidence: e.confidence
+          }));
+          await db.insert(fieldEvidence).values(evidenceBatch);
+
+          const updateObj: any = { lastEnrichedAt: new Date(), enrichmentSource: 'SOCIAL_MEDIA' };
+          if (socialResult.socialUrl) {
+            updateObj.website = socialResult.socialUrl;
+            updateObj.websiteStatus = 'social_profile';
+            updateObj.websiteConfidence = 'HIGH';
+          }
+          if (!lead.phone && socialResult.phone) updateObj.phone = socialResult.phone;
+          if (!lead.email && socialResult.email) updateObj.email = socialResult.email;
+          if (!lead.address && socialResult.address) updateObj.address = socialResult.address;
+          if (socialResult.bio) {
+            updateObj.notes = lead.notes ? `${lead.notes}\nBio: ${socialResult.bio}` : `Bio: ${socialResult.bio}`;
+          }
+
+          await db.update(leads).set(updateObj).where(eq(leads.id, leadId));
+        }
+      }
+
+      await CRMService.logActivity(leadId, user.id, 'SCRAPE_COMPLETED', `Extracted ${evidenceCount} verified data points from ${targetUrl || 'social presence'}`, 'SYSTEM');
+
+      const refreshedLead = await db.query.leads.findFirst({
+        where: eq(leads.id, leadId),
+        with: { evidence: true, opportunities: true, audits: { with: { findings: true } } }
+      });
+
+      res.json({ success: true, data: refreshedLead, evidenceCount });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   app.get('/api/leads/:id/ai', async (req: AuthRequest, res) => {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
@@ -664,7 +765,14 @@ async function startServer() {
     res.status(404).json({ success: false, error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
   });
 
+  return app;
+}
+
+export const app = createServerApp();
+
+async function startServer() {
   if (process.env.NODE_ENV === 'development') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'custom' });
     app.use(vite.middlewares);
     app.use('*', async (req, res, next) => {
@@ -700,8 +808,16 @@ async function startServer() {
 
   const port = process.env.NODE_ENV === 'production' && process.env.PORT ? Number(process.env.PORT) : 3000;
   app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${port}`);
+    console.log(`\n---------------------------------------------------`);
+    console.log(`🚀 LEADFORGE BACKEND READY`);
+    console.log(`📡 Listening on: http://0.0.0.0:${port}`);
+    console.log(`🔧 Mode: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`---------------------------------------------------\n`);
   });
 }
 
-startServer();
+const isMainModule = process.argv[1] && (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js'));
+
+if (isMainModule && !process.env.VERCEL) {
+  startServer();
+}

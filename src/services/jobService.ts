@@ -9,6 +9,7 @@ import { EnrichmentBot } from './enrichmentBot.ts';
 import { SearchProviderFactory } from './search/types.ts';
 import { WebsiteService } from './websiteService.ts';
 import { OpportunityService } from './opportunityService.ts';
+import { SocialEnrichmentService } from './socialEnrichmentService.ts';
 import { logger, metrics } from '../lib/monitoring.ts';
 
 export class JobService {
@@ -224,9 +225,9 @@ export class JobService {
       }
 
       // Phase G: Contact Enrichment via Deep Site Crawl
-      if (website) {
+      if (website && !website.includes('facebook.com') && !website.includes('instagram.com')) {
         const enriched = await EnrichmentBot.enrich(website);
-        results.pagesCrawled += 1;
+        results.pagesCrawled = (results.pagesCrawled || 0) + 1;
 
         if (enriched.evidence.length > 0) {
           const evidenceBatch = enriched.evidence.map(e => ({
@@ -248,14 +249,24 @@ export class JobService {
 
           if (!lead.phone && enriched.phone) {
             updateObj.phone = enriched.phone;
-            results.phonesFound++;
+            results.phonesFound = (results.phonesFound || 0) + 1;
           }
           if (!lead.email && enriched.email) {
             updateObj.email = enriched.email;
-            results.emailsFound++;
+            results.emailsFound = (results.emailsFound || 0) + 1;
           }
-          if (enriched.whatsapp) {
-            updateObj.notes = lead.notes ? `${lead.notes}\nWhatsApp: ${enriched.whatsapp}` : `WhatsApp: ${enriched.whatsapp}`;
+          if (!lead.address && enriched.address) {
+            updateObj.address = enriched.address;
+          }
+
+          const extraNotes: string[] = [];
+          if (enriched.whatsapp) extraNotes.push(`WhatsApp: ${enriched.whatsapp}`);
+          if (enriched.openingHours) extraNotes.push(`Hours: ${enriched.openingHours}`);
+          if (enriched.managerName) extraNotes.push(`Dirigeant/Manager: ${enriched.managerName}`);
+          if (enriched.siretOrVat) extraNotes.push(`Legal ID: ${enriched.siretOrVat}`);
+
+          if (extraNotes.length > 0) {
+            updateObj.notes = lead.notes ? `${lead.notes}\n${extraNotes.join('\n')}` : extraNotes.join('\n');
           }
 
           await db.update(schema.leads).set(updateObj).where(eq(schema.leads.id, lead.id));
@@ -267,6 +278,59 @@ export class JobService {
           results.auditsCompleted = (results.auditsCompleted || 0) + 1;
         } catch (auditErr: any) {
           console.warn(`[JobService] Audit failed for #${lead.id}: ${auditErr.message}`);
+        }
+      } else {
+        // Phase G-Fallback: No Traditional Website -> Extract Maximum Information from Social Media
+        // (100% Real public data only - zero fake/synthetic data)
+        const rawTags = (lead.rawData as any)?.tags || (lead.rawData as any) || {};
+        const socialResult = await SocialEnrichmentService.enrichFromSocialMedia(
+          lead.companyName, 
+          lead.city, 
+          lead.country, 
+          rawTags
+        );
+
+        if (socialResult.evidence.length > 0) {
+          const evidenceBatch = socialResult.evidence.map(e => ({
+            leadId: lead.id,
+            fieldName: e.field,
+            value: e.value,
+            source: socialResult.platform ? `${socialResult.platform.toUpperCase()}_PROFILE` : 'SOCIAL_PRESENCE',
+            sourceUrl: e.url,
+            verified: e.confidence === 'HIGH',
+            confidence: e.confidence
+          }));
+
+          await db.insert(schema.fieldEvidence).values(evidenceBatch);
+
+          const updateObj: any = {
+            lastEnrichedAt: new Date(),
+            enrichmentSource: 'SOCIAL_MEDIA'
+          };
+
+          if (socialResult.socialUrl) {
+            updateObj.website = socialResult.socialUrl;
+            updateObj.websiteStatus = 'social_profile';
+            updateObj.websiteConfidence = 'HIGH';
+            results.verifiedWebsites = (results.verifiedWebsites || 0) + 1;
+          }
+
+          if (!lead.phone && socialResult.phone) {
+            updateObj.phone = socialResult.phone;
+            results.phonesFound = (results.phonesFound || 0) + 1;
+          }
+          if (!lead.email && socialResult.email) {
+            updateObj.email = socialResult.email;
+            results.emailsFound = (results.emailsFound || 0) + 1;
+          }
+          if (!lead.address && socialResult.address) {
+            updateObj.address = socialResult.address;
+          }
+          if (socialResult.bio) {
+            updateObj.notes = lead.notes ? `${lead.notes}\nBio: ${socialResult.bio}` : `Bio: ${socialResult.bio}`;
+          }
+
+          await db.update(schema.leads).set(updateObj).where(eq(schema.leads.id, lead.id));
         }
       }
 

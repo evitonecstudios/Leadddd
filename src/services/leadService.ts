@@ -120,7 +120,7 @@ export class LeadService {
       source: data.source || 'OpenStreetMap',
       sourceUrl: data.sourceUrl,
       discoverySource: data.source || 'OpenStreetMap',
-      websiteStatus: hasWebsite ? 'verified' : 'unknown',
+      websiteStatus: hasWebsite ? (data.website?.includes('facebook.com') || data.website?.includes('instagram.com') || data.website?.includes('linkedin.com') ? 'social_profile' : 'verified') : 'unknown',
       websiteConfidence: hasWebsite ? 'HIGH' : 'UNKNOWN',
       dataConfidence: (hasWebsite && hasPhone) ? 'HIGH' : (hasWebsite || hasPhone) ? 'MEDIUM' : 'LOW',
       leadStatus: 'NEW'
@@ -154,6 +154,18 @@ export class LeadService {
       });
     }
 
+    if (data.address) {
+      evidenceItems.push({
+        leadId: newLead.id,
+        fieldName: 'address',
+        value: data.address,
+        source: sourceName,
+        sourceUrl: data.sourceUrl || null,
+        verified: true,
+        confidence: 'HIGH' as const,
+      });
+    }
+
     if (data.website) {
       evidenceItems.push({
         leadId: newLead.id,
@@ -163,6 +175,34 @@ export class LeadService {
         sourceUrl: data.sourceUrl || null,
         verified: true,
         confidence: 'HIGH' as const,
+      });
+    }
+
+    if (data.rawData?.openingHours) {
+      evidenceItems.push({
+        leadId: newLead.id,
+        fieldName: 'opening_hours',
+        value: data.rawData.openingHours,
+        source: sourceName,
+        sourceUrl: data.sourceUrl || null,
+        verified: true,
+        confidence: 'HIGH' as const,
+      });
+    }
+
+    if (data.rawData?.socialLinks) {
+      Object.entries(data.rawData.socialLinks).forEach(([platform, url]) => {
+        if (url && typeof url === 'string') {
+          evidenceItems.push({
+            leadId: newLead.id,
+            fieldName: platform,
+            value: url,
+            source: sourceName,
+            sourceUrl: url,
+            verified: true,
+            confidence: 'HIGH' as const,
+          });
+        }
       });
     }
 

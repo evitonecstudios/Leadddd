@@ -13,17 +13,24 @@ if (!sqlHost || !sqlDbName || !user || !password) {
   // We throw only if we are actually trying to run migrations.
 }
 
+const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
 export default defineConfig({
   schema: "./src/db/schema.ts",
   out: "./drizzle",
   dialect: "postgresql",
   schemaFilter: ["public"],
-  dbCredentials: {
-    host: sqlHost || 'localhost',
-    user: user || 'admin',
-    password: password || 'password',
-    database: sqlDbName || 'leadforge',
-    ssl: false,
-  },
+  dbCredentials: databaseUrl
+    ? {
+        url: databaseUrl,
+        ssl: databaseUrl.includes('localhost') ? false : { rejectUnauthorized: false },
+      }
+    : {
+        host: sqlHost || 'localhost',
+        user: user || 'admin',
+        password: password || 'password',
+        database: sqlDbName || 'leadforge',
+        ssl: false,
+      },
   verbose: true,
 });

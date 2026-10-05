@@ -137,15 +137,21 @@ export class OSMSource implements LeadSource {
         const lat = el.lat ?? el.center?.lat;
         const lon = el.lon ?? el.center?.lon;
 
-        // Comprehensive Contact Tag Extraction
+        // Comprehensive Contact & Social Tag Extraction
         const phone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile || 
                       tags['contact:mobile'] || tags['telephone'] || tags['contact:telephone'] || tags.tel;
 
-        const website = tags.website || tags['contact:website'] || tags.url || tags['contact:url'] || 
-                        tags['contact:web'] || tags['website:official'] || tags['website:menu'] ||
-                        tags['contact:facebook'] || tags.facebook || tags['contact:instagram'] || tags.instagram;
+        const officialWebsite = tags.website || tags['contact:website'] || tags.url || tags['contact:url'] || 
+                                tags['contact:web'] || tags['website:official'] || tags['website:menu'];
 
+        const socialFb = tags['contact:facebook'] || tags.facebook;
+        const socialInsta = tags['contact:instagram'] || tags.instagram;
+        const socialLinkedin = tags['contact:linkedin'] || tags.linkedin;
+        const socialTwitter = tags['contact:twitter'] || tags.twitter;
+
+        const website = officialWebsite || socialFb || socialInsta || socialLinkedin;
         const email = tags.email || tags['contact:email'] || tags['email:contact'];
+        const openingHours = tags.opening_hours || tags['contact:opening_hours'];
 
         // If user specifically requested leads with verified contact details only
         if (criteria.requireContactInfo && !phone && !website && !email) {
@@ -165,7 +171,17 @@ export class OSMSource implements LeadSource {
           email: email ? String(email).trim() : undefined,
           latitude: lat,
           longitude: lon,
-          rawData: { ...el, chainsExcludedCount }
+          rawData: { 
+            ...el, 
+            chainsExcludedCount,
+            openingHours,
+            socialLinks: {
+              facebook: socialFb,
+              instagram: socialInsta,
+              linkedin: socialLinkedin,
+              twitter: socialTwitter
+            }
+          }
         });
       }
 
