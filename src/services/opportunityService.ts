@@ -26,7 +26,7 @@ export class OpportunityService {
       where: eq(leads.id, leadId),
       with: {
         audits: {
-          orderBy: (audits, { desc }) => [desc(audits.createdAt)],
+          orderBy: (audits: any, { desc }: any) => [desc(audits.createdAt)],
           limit: 1,
           with: {
             findings: true
@@ -68,7 +68,7 @@ export class OpportunityService {
           title: 'SEO Optimization',
           description: 'Technical SEO issues are affecting search engine visibility.',
           severity: 'MEDIUM',
-          evidence: findings.filter(f => f.category === 'SEO').map(f => f.title).join(', '),
+          evidence: findings.filter((f: any) => f.category === 'SEO').map((f: any) => f.title).join(', '),
           confidence: 'HIGH',
           recommendedService: 'SEO Audit & Implementation',
           score: 20
@@ -78,9 +78,9 @@ export class OpportunityService {
       // 3. BOOKING OPPORTUNITY
       const category = lead.category?.toLowerCase() || '';
       const supportsBooking = this.CATEGORY_RULES[category]?.includes('BOOKING') || 
-                             findings.some(f => f.category === 'Conversion' && f.title.includes('Booking'));
+                             findings.some((f: any) => f.category === 'Conversion' && f.title.includes('Booking'));
       
-      if (supportsBooking && findings.some(f => f.title === 'Booking System not detected')) {
+      if (supportsBooking && findings.some((f: any) => f.title === 'Booking System not detected')) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
@@ -97,7 +97,7 @@ export class OpportunityService {
 
       // 4. WHATSAPP OPPORTUNITY
       const supportsWhatsApp = this.CATEGORY_RULES[category]?.includes('WHATSAPP');
-      if (supportsWhatsApp && findings.some(f => f.title === 'WhatsApp not detected')) {
+      if (supportsWhatsApp && findings.some((f: any) => f.title === 'WhatsApp not detected')) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
@@ -121,7 +121,7 @@ export class OpportunityService {
           title: 'Local SEO & Schema',
           description: 'Missing structured data prevents the business from ranking in map packs.',
           severity: 'HIGH',
-          evidence: findings.filter(f => f.category === 'Local SEO').map(f => f.title).join(', '),
+          evidence: findings.filter((f: any) => f.category === 'Local SEO').map((f: any) => f.title).join(', '),
           confidence: 'HIGH',
           recommendedService: 'Local SEO Package',
           score: 20
@@ -145,7 +145,7 @@ export class OpportunityService {
       }
 
       // 7. SECURITY & SSL CERTIFICATE FIX
-      const hasSecurityIssue = findings.some(f => f.category === 'Security' || f.title.includes('SSL') || f.title.includes('Certificate'));
+      const hasSecurityIssue = findings.some((f: any) => f.category === 'Security' || f.title.includes('SSL') || f.title.includes('Certificate'));
       if (hasSecurityIssue) {
         newOpportunities.push({
           leadId,
@@ -154,7 +154,7 @@ export class OpportunityService {
           title: 'SSL / Security Certificate Fix',
           description: 'The website has an invalid, mismatched, or expired SSL certificate triggering browser warnings.',
           severity: 'CRITICAL',
-          evidence: findings.filter(f => f.category === 'Security' || f.title.includes('SSL') || f.title.includes('Certificate')).map(f => f.title).join(', '),
+          evidence: findings.filter((f: any) => f.category === 'Security' || f.title.includes('SSL') || f.title.includes('Certificate')).map((f: any) => f.title).join(', '),
           confidence: 'HIGH',
           recommendedService: 'SSL Certificate & Domain Setup',
           score: 35
@@ -162,7 +162,7 @@ export class OpportunityService {
       }
 
       // 8. SERVER / HOSTING RELIABILITY FIX
-      const hasHostingIssue = findings.some(f => f.title.includes('Timeout') || f.title.includes('Restricted') || f.title.includes('Server Error') || f.title.includes('Failure'));
+      const hasHostingIssue = findings.some((f: any) => f.title.includes('Timeout') || f.title.includes('Restricted') || f.title.includes('Server Error') || f.title.includes('Failure'));
       if (hasHostingIssue) {
         newOpportunities.push({
           leadId,
@@ -171,7 +171,7 @@ export class OpportunityService {
           title: 'Hosting & Server Reliability Fix',
           description: 'The website experiences severe server latency, timeouts, or access restrictions.',
           severity: 'HIGH',
-          evidence: findings.filter(f => f.title.includes('Timeout') || f.title.includes('Restricted') || f.title.includes('Server Error') || f.title.includes('Failure')).map(f => f.title).join(', '),
+          evidence: findings.filter((f: any) => f.title.includes('Timeout') || f.title.includes('Restricted') || f.title.includes('Server Error') || f.title.includes('Failure')).map((f: any) => f.title).join(', '),
           confidence: 'HIGH',
           recommendedService: 'Managed Cloud Hosting & Modernization',
           score: 30

@@ -1208,6 +1208,7 @@ function LeadsView({ token, onSelectLead }: any) {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [websiteFilter, setWebsiteFilter] = useState('');
   const [selectedLeads, setSelectedLeads] = useState<number[]>([]);
 
   const fetchLeads = async () => {
@@ -1215,12 +1216,13 @@ function LeadsView({ token, onSelectLead }: any) {
     const params = new URLSearchParams();
     if (search) params.append('search', search);
     if (statusFilter) params.append('status', statusFilter);
+    if (websiteFilter) params.append('hasWebsite', websiteFilter);
     const res = await api.get(`/api/leads?${params.toString()}`, token);
     if (res.success) setLeads(res.data);
     setLoading(false);
   };
 
-  useEffect(() => { if (token) fetchLeads(); }, [token, statusFilter]);
+  useEffect(() => { if (token) fetchLeads(); }, [token, statusFilter, websiteFilter]);
 
   const [auditMessage, setAuditMessage] = useState<string | null>(null);
 
@@ -1273,6 +1275,15 @@ function LeadsView({ token, onSelectLead }: any) {
             >
               <option value="">All Statuses</option>
               {['NEW', 'REVIEWED', 'QUALIFIED', 'CONTACTED', 'REPLIED', 'WON', 'LOST', 'DISMISSED'].map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select 
+              value={websiteFilter}
+              onChange={e => setWebsiteFilter(e.target.value)}
+              className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold uppercase tracking-wider text-slate-500 outline-none"
+            >
+              <option value="">All Presence</option>
+              <option value="true">Has Website</option>
+              <option value="false">No Website</option>
             </select>
           </div>
         </div>

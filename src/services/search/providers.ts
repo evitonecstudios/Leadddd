@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { GoogleGenAI } from '@google/genai';
 import { SearchProvider, SearchResult } from './types.ts';
 import { IdentityService } from '../identityService.ts';
 
@@ -25,9 +26,14 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
         {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://duckduckgo.com/',
+            'Origin': 'https://lite.duckduckgo.com'
           },
-          timeout: 8000
+          timeout: 8000,
+          validateStatus: (status) => status === 200 // Fail on 403/other
         }
       );
 
@@ -68,11 +74,69 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
 
       return results;
     } catch (err: any) {
-      console.warn(`[DuckDuckGoSearchProvider] Search notice: ${err.message}`);
+      if (err.response?.status === 403) {
+        console.warn(`[DuckDuckGoSearchProvider] Access blocked (403). Automated requests are being restricted by the provider.`);
+      } else {
+        console.warn(`[DuckDuckGoSearchProvider] Search notice: ${err.message}`);
+      }
       return [];
     }
   }
 }
+
+/**
+ * Gemini Search Provider (Reliable, High-Quality, Using Google Search Grounding)
+ * Uses Gemini's built-in Google Search tool to find official business websites.
+ */
+export class GeminiSearchProvider implements SearchProvider {
+  private ai: GoogleGenAI;
+  private apiKey: string;
+
+  constructor() {
+    this.apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
+    this.ai = new GoogleGenAI({ apiKey: this.apiKey });
+  }
+
+  getName(): string {
+    return 'GeminiSearch';
+  }
+
+  isVerified(): boolean {
+    return Boolean(this.apiKey);
+  }
+
+  async search(query: string, limit: number = 3): Promise<SearchResult[]> {
+    if (!this.isVerified()) return [];
+
+    try {
+      const response = await this.ai.models.generateContent({ 
+        model: 'gemini-3.8-flash',
+        contents: [{ role: 'user', parts: [{ text: `Find the official website for this business. Return ONLY a JSON array of objects with "title" and "url" fields. Business query: ${query}. Limit to ${limit} results.` }] }],
+        config: {
+          tools: [{ googleSearch: {} }] as any,
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const text = response.text;
+      if (text) {
+        const items = JSON.parse(text);
+        return items.map((item: any) => ({
+          title: item.title || 'Official Website',
+          url: item.url,
+          snippet: item.title,
+          source: 'GEMINI_GOOGLE_SEARCH'
+        }));
+      }
+
+      return [];
+    } catch (err: any) {
+      console.warn(`[GeminiSearchProvider] Search failed: ${err.message}`);
+      return [];
+    }
+  }
+}
+
 
 /**
  * Local & Deterministic Website Discovery Provider ($0 cost, 100% legitimate)
@@ -295,3 +359,4 @@ export class BingSearchProvider implements SearchProvider {
     }
   }
 }
+

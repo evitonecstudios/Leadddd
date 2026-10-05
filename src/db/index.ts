@@ -44,9 +44,23 @@ export const createPool = () => {
   return global._postgresPool;
 };
 
-// Initialize pool lazily on first use or explicitly here
-createPool();
-const pool = global._postgresPool!;
-export const db = drizzle(pool, { schema: fullSchema });
+// Internal instance to be initialized lazily
+let _db: any = null;
+
+export const getDb = () => {
+  if (!_db) {
+    const pool = createPool();
+    _db = drizzle(pool, { schema: fullSchema });
+  }
+  return _db;
+};
+
+// Export a proxy that mimics the db object but initializes on first access
+export const db = new Proxy({} as any, {
+  get(target, prop, receiver) {
+    return Reflect.get(getDb(), prop, receiver);
+  }
+});
+
 
 

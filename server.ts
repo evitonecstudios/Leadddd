@@ -19,7 +19,7 @@ import { EnrichmentBot } from './src/services/enrichmentBot.ts';
 import { SocialEnrichmentService } from './src/services/socialEnrichmentService.ts';
 import { db } from './src/db/index.ts';
 import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './src/db/schema.ts';
-import { eq, and, sql, desc, isNull, ilike, or, gt, lt } from 'drizzle-orm';
+import { eq, and, sql, desc, isNull, isNotNull, ilike, or, gt, lt } from 'drizzle-orm';
 import Papa from 'papaparse';
 
 
@@ -36,21 +36,59 @@ export function createServerApp() {
   });
 
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', environment: process.env.NODE_ENV });
+  });
+
+  // Database Connection Debug Endpoint (JSON only, no UI)
+  app.get('/api/debug/db', async (req, res) => {
+    try {
+      const startTime = Date.now();
+      const result = await db.execute(sql`SELECT 1 as connected`);
+      const duration = Date.now() - startTime;
+      res.json({ 
+        success: true, 
+        connected: true, 
+        durationMs: duration,
+        config: {
+          hasDatabaseUrl: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
+          hasSqlHost: Boolean(process.env.SQL_HOST),
+          env: process.env.NODE_ENV
+        }
+      });
+    } catch (error: any) {
+      console.error('[DEBUG-DB] Connection failed:', error);
+      res.status(500).json({ 
+        success: false, 
+        connected: false, 
+        error: error.message,
+        code: error.code,
+        hint: 'Check DATABASE_URL environment variable and database status.'
+      });
+    }
   });
 
   app.get('/api/me', async (req: AuthRequest, res) => {
     try {
-      const user = await getOrCreateUser(req.user!.uid, req.user!.email!, req.user!.name);
+      if (!req.user?.uid) {
+        return res.status(401).json({ success: false, error: 'Unauthorized: User identity not found in token' });
+      }
+      const user = await getOrCreateUser(req.user.uid, req.user.email!, req.user.name);
       res.json({ success: true, data: user });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[API-ME] Error:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Failed to retrieve user profile',
+        message: error.message,
+        db_connected: false // likely cause
+      });
     }
   });
 
   app.get('/api/dashboard/stats', async (req: AuthRequest, res) => {
     try {
-      const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
+      if (!req.user?.uid) return res.status(401).json({ success: false, error: 'Unauthorized' });
+      const user = await getOrCreateUser(req.user.uid, req.user.email!);
       
       const counts = await db.select({
         total: sql<number>`count(*)`,
@@ -86,30 +124,24 @@ export function createServerApp() {
         } 
       });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[API-DASHBOARD] Stats failure:', error);
+      res.status(500).json({ success: false, error: 'Failed to load dashboard stats', message: error.message });
     }
   });
 
   // Leads with Filtering, Sorting, Pagination
   app.get('/api/leads', async (req: AuthRequest, res) => {
     try {
-      const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
+      if (!req.user?.uid) return res.status(401).json({ success: false, error: 'Unauthorized' });
+      const user = await getOrCreateUser(req.user.uid, req.user.email!);
       const { 
         status, country, city, category, 
         minOppScore, maxOppScore, 
         sortBy = 'createdAt', sortOrder = 'desc',
         page = '1', limit = '50',
-        search
+        search,
+        hasWebsite
       } = req.query;
-
-      let query = db.select()
-        .from(leads)
-        .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
-        .where(and(
-          eq(campaigns.userId, user.id),
-          isNull(leads.deletedAt)
-        ))
-        .$dynamic();
 
       const conditions = [
         eq(campaigns.userId, user.id),
@@ -122,6 +154,13 @@ export function createServerApp() {
       if (category) conditions.push(eq(leads.category, category as string));
       if (minOppScore) conditions.push(gt(leads.opportunityScore, parseInt(minOppScore as string)));
       if (maxOppScore) conditions.push(lt(leads.opportunityScore, parseInt(maxOppScore as string)));
+      
+      if (hasWebsite === 'true') {
+        conditions.push(and(isNotNull(leads.website), sql`${leads.website} != ''`) as any);
+      } else if (hasWebsite === 'false') {
+        conditions.push(or(isNull(leads.website), eq(leads.website, '')) as any);
+      }
+
       if (search) {
         conditions.push(or(
           ilike(leads.companyName, `%${search}%`),
@@ -140,9 +179,11 @@ export function createServerApp() {
         .limit(parseInt(limit as string))
         .offset(offset);
       
-      res.json({ success: true, data: results.map(l => l.leads) });
+      res.json({ success: true, data: results.map((l: any) => l.leads) });
+
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      console.error('[API-LEADS] Fetch failure:', error);
+      res.status(500).json({ success: false, error: 'Failed to load leads', message: error.message });
     }
   });
 
@@ -399,7 +440,8 @@ export function createServerApp() {
         .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
         .where(and(eq(campaigns.userId, user.id), isNull(leads.deletedAt)));
       
-      const flatLeads = userLeads.map(l => l.leads);
+      const flatLeads = userLeads.map((l: any) => l.leads);
+
       const csv = Papa.unparse(flatLeads);
       
       res.setHeader('Content-Type', 'text/csv');
@@ -421,9 +463,10 @@ export function createServerApp() {
           campaign: true,
           opportunities: true,
           audits: {
-            orderBy: (audits, { desc }) => [desc(audits.createdAt)],
+            orderBy: (audits: any, { desc }: any) => [desc(audits.createdAt)],
             with: { findings: true }
           },
+
           evidence: true
         }
       });
@@ -626,9 +669,10 @@ export function createServerApp() {
         lead: { companyName: lead.companyName, category: lead.category, city: lead.city, country: lead.country, address: lead.address, phone: lead.phone, email: lead.email, website: lead.website, source: lead.source },
         website: { status: lead.websiteStatus, url: lead.website, finalUrl: latestAudit.finalUrl },
         audit: { overallScore: latestAudit.overallScore, technicalScore: latestAudit.technicalScore, seoScore: latestAudit.seoScore, mobileScore: latestAudit.mobileScore, performanceScore: latestAudit.performanceScore, conversionScore: latestAudit.conversionScore, localSeoScore: latestAudit.localSeoScore },
-        findings: findings.map(f => ({ category: f.category, severity: f.severity, title: f.title, evidence: f.evidence })),
-        opportunities: leadOpportunities.map(o => ({ type: o.type, title: o.title, description: o.description, evidence: o.evidence }))
+        findings: findings.map((f: any) => ({ category: f.category, severity: f.severity, title: f.title, evidence: f.evidence })),
+        opportunities: leadOpportunities.map((o: any) => ({ type: o.type, title: o.title, description: o.description, evidence: o.evidence }))
       };
+
 
       const analysis = await AIService.generateAnalysis(leadId, aiInput, language, tone);
       await CRMService.logActivity(leadId, user.id, 'AI_ANALYSIS_GENERATED', `AI interpretation generated (${tone}, ${language})`, 'AI');

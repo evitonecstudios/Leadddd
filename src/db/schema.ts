@@ -6,7 +6,7 @@ export const users = pgTable('users', {
   uid: text('uid').notNull().unique('users_uid_key'),
   email: text('email').notNull(),
   name: text('name'),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const campaigns = pgTable('campaigns', {
@@ -16,8 +16,8 @@ export const campaigns = pgTable('campaigns', {
   industry: text('industry'),
   location: text('location'),
   filters: jsonb('filters'),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const leads = pgTable('leads', {
@@ -47,18 +47,18 @@ export const leads = pgTable('leads', {
   websiteExists: boolean('website_exists'),
   websiteStatus: text('website_status').default('unknown'),
   websiteConfidence: text('website_confidence').default('UNKNOWN'),
-  websiteLastChecked: timestamp('website_last_checked'),
+  websiteLastChecked: timestamp('website_last_checked', { withTimezone: true }),
   dataConfidence: text('data_confidence').default('UNKNOWN'),
   auditScore: integer('audit_score'),
   opportunityScore: integer('opportunity_score'),
   leadStatus: text('lead_status').default('NEW'),
   notes: text('notes'),
-  lastContactedAt: timestamp('last_contacted_at'),
-  nextFollowupAt: timestamp('next_followup_at'),
-  lastEnrichedAt: timestamp('last_enriched_at'),
-  deletedAt: timestamp('deleted_at'),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  lastContactedAt: timestamp('last_contacted_at', { withTimezone: true }),
+  nextFollowupAt: timestamp('next_followup_at', { withTimezone: true }),
+  lastEnrichedAt: timestamp('last_enriched_at', { withTimezone: true }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const audits = pgTable('audits', {
@@ -79,8 +79,8 @@ export const audits = pgTable('audits', {
   metrics: jsonb('metrics').notNull(),
   aiAnalysis: jsonb('ai_analysis'),
   error: text('error'),
-  createdAt: timestamp('created_at').defaultNow(),
-  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 });
 
 export const auditFindings = pgTable('audit_findings', {
@@ -95,7 +95,7 @@ export const auditFindings = pgTable('audit_findings', {
   confidence: text('confidence').default('UNKNOWN'),
   pageUrl: text('page_url'),
   selector: text('selector'),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const fieldEvidence = pgTable('field_evidence', {
@@ -107,7 +107,7 @@ export const fieldEvidence = pgTable('field_evidence', {
   sourceUrl: text('source_url'),
   verified: boolean('verified').default(false),
   confidence: text('confidence').default('MEDIUM'),
-  checkedAt: timestamp('checked_at').defaultNow(),
+  checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow(),
 });
 
 export const jobs = pgTable('jobs', {
@@ -119,8 +119,8 @@ export const jobs = pgTable('jobs', {
   total: integer('total').default(0),
   results: jsonb('results'),
   error: text('error'),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const sourceRuns = pgTable('source_runs', {
@@ -129,7 +129,7 @@ export const sourceRuns = pgTable('source_runs', {
   query: jsonb('query'),
   resultsCount: integer('results_count').default(0),
   status: text('status').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const opportunities = pgTable('opportunities', {
@@ -145,8 +145,8 @@ export const opportunities = pgTable('opportunities', {
   recommendedService: text('recommended_service'),
   status: text('status').default('NEW'),
   score: integer('score').default(0),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const aiAnalyses = pgTable('ai_analyses', {
@@ -159,7 +159,7 @@ export const aiAnalyses = pgTable('ai_analyses', {
   result: jsonb('result').notNull(),
   language: text('language').default('en'),
   tone: text('tone').default('professional'),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const activities = pgTable('activities', {
@@ -170,7 +170,7 @@ export const activities = pgTable('activities', {
   metadata: jsonb('metadata'),
   origin: text('origin').default('SYSTEM'),
   userId: integer('user_id').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const notes = pgTable('notes', {
@@ -178,8 +178,8 @@ export const notes = pgTable('notes', {
   leadId: integer('lead_id').notNull(),
   userId: integer('user_id').notNull(),
   content: text('content').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const tasks = pgTable('tasks', {
@@ -187,11 +187,11 @@ export const tasks = pgTable('tasks', {
   leadId: integer('lead_id').notNull(),
   userId: integer('user_id').notNull(),
   title: text('title').notNull(),
-  dueDate: timestamp('due_date'),
+  dueDate: timestamp('due_date', { withTimezone: true }),
   priority: text('priority').default('MEDIUM'),
   status: text('status').default('TODO'),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const savedViews = pgTable('saved_views', {
@@ -199,8 +199,8 @@ export const savedViews = pgTable('saved_views', {
   userId: integer('user_id').notNull(),
   name: text('name').notNull(),
   filters: jsonb('filters').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 export const systemLogs = pgTable('system_logs', {
@@ -213,7 +213,7 @@ export const systemLogs = pgTable('system_logs', {
   metadata: jsonb('metadata'),
   requestId: text('request_id'),
   retryCount: integer('retry_count').default(0),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const requestMetrics = pgTable('request_metrics', {
@@ -225,7 +225,7 @@ export const requestMetrics = pgTable('request_metrics', {
   tokenCount: integer('token_count'),
   estimatedCost: real('estimated_cost'),
   metadata: jsonb('metadata'),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const qualityReviews = pgTable('quality_reviews', {
@@ -239,7 +239,7 @@ export const qualityReviews = pgTable('quality_reviews', {
   errorCategory: text('error_category'),
   notes: text('notes'),
   userId: integer('user_id').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 
 export const usersRelations = relations(users, ({ many }) => ({
