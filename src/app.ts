@@ -5,24 +5,22 @@ import * as dotenv from 'dotenv';
 import fs from 'fs';
 dotenv.config();
 
-import { requireAuth, AuthRequest } from './src/middleware/auth';
-import { getOrCreateUser } from './src/db/users';
-import { LeadService } from './src/services/leadService';
-import { WebsiteService } from './src/services/websiteService';
-import { JobService } from './src/services/jobService';
-import { SourceRegistry } from './src/services/sources/registry';
-import { OpportunityService } from './src/services/opportunityService';
-import { SearchProviderFactory } from './src/services/search/types';
-import { AIService } from './src/services/aiService';
-import { CRMService, LeadStatus } from './src/services/crmService';
-import { EnrichmentBot } from './src/services/enrichmentBot';
-import { SocialEnrichmentService } from './src/services/socialEnrichmentService';
-import { db } from './src/db/index';
-import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './src/db/schema';
-import { eq, and, sql, desc, isNull, isNotNull, ilike, or, gt, lt, ne } from 'drizzle-orm';
+import { requireAuth, AuthRequest } from './middleware/auth';
+import { getOrCreateUser } from './db/users';
+import { LeadService } from './services/leadService';
+import { WebsiteService } from './services/websiteService';
+import { JobService } from './services/jobService';
+import { SourceRegistry } from './services/sources/registry';
+import { OpportunityService } from './services/opportunityService';
+import { SearchProviderFactory } from './services/search/types';
+import { AIService } from './services/aiService';
+import { CRMService, LeadStatus } from './services/crmService';
+import { EnrichmentBot } from './services/enrichmentBot';
+import { SocialEnrichmentService } from './services/socialEnrichmentService';
+import { db } from './db/index';
+import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './db/schema';
+import { eq, and, sql, desc, isNull, isNotNull, ilike, or, gt, lt } from 'drizzle-orm';
 import Papa from 'papaparse';
-
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,39 +31,43 @@ export function createServerApp() {
 
   // PUBLIC DIAGNOSTIC ENDPOINTS
   app.get('/api/health', async (req, res) => {
-    const { checkDbHealth } = await import('./src/db/index.ts');
-    const dbStatus = await checkDbHealth();
-    res.json({ 
-      status: 'ok', 
-      environment: process.env.NODE_ENV,
-      database: dbStatus,
-      timestamp: new Date().toISOString()
-    });
+    try {
+      const { checkDbHealth } = await import('./db/index');
+      const dbStatus = await checkDbHealth();
+      res.json({ 
+        status: 'ok', 
+        environment: process.env.NODE_ENV,
+        database: dbStatus,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      res.status(500).json({ status: 'error', error: err.message });
+    }
   });
 
   app.get('/api/debug/db', async (req, res) => {
-    const { checkDbHealth } = await import('./src/db/index.ts');
-    const dbStatus = await checkDbHealth();
-    
-    console.log('[DEBUG-DB] Explicit Diagnostics Triggered');
-    console.log('[DEBUG-DB] Status:', dbStatus.success ? 'CONNECTED' : 'FAILED');
-    console.log('[DEBUG-DB] URL Pattern:', dbStatus.diagnostics?.urlPattern);
-    if (!dbStatus.success) {
-      console.error('[DEBUG-DB] Error:', dbStatus.error);
+    try {
+      const { checkDbHealth } = await import('./db/index');
+      const dbStatus = await checkDbHealth();
+      res.json({
+        success: dbStatus.success,
+        diagnostics: {
+          connected: dbStatus.connected,
+          fullyProvisioned: dbStatus.fullyProvisioned,
+          tables: dbStatus.tables,
+          error: dbStatus.error,
+          code: dbStatus.code,
+          config: {
+            hasDatabaseUrl: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
+            urlPrefix: (process.env.DATABASE_URL || process.env.POSTGRES_URL)?.substring(0, 15),
+            urlSuffix: (process.env.DATABASE_URL || process.env.POSTGRES_URL)?.slice(-10),
+            nodeEnv: process.env.NODE_ENV
+          }
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
     }
-    if (dbStatus.diagnostics?.mismatches?.length) {
-      console.warn('[DEBUG-DB] Configuration Mismatches:', dbStatus.diagnostics.mismatches);
-    }
-
-    res.json({
-      success: dbStatus.success,
-      connected: dbStatus.connected,
-      fullyProvisioned: dbStatus.fullyProvisioned,
-      tables: dbStatus.tables,
-      error: dbStatus.error,
-      code: dbStatus.code,
-      diagnostics: dbStatus.diagnostics
-    });
   });
 
   app.use('/api', (req, res, next) => {
@@ -165,7 +167,7 @@ export function createServerApp() {
       if (maxOppScore) conditions.push(lt(leads.opportunityScore, parseInt(maxOppScore as string)));
       
       if (hasWebsite === 'true') {
-        conditions.push(and(isNotNull(leads.website), ne(leads.website, '')) as any);
+        conditions.push(and(isNotNull(leads.website), sql`${leads.website} != ''`) as any);
       } else if (hasWebsite === 'false') {
         conditions.push(or(isNull(leads.website), eq(leads.website, '')) as any);
       }
@@ -819,58 +821,4 @@ export function createServerApp() {
   });
 
   return app;
-}
-
-export const app = createServerApp();
-
-async function startServer() {
-  if (process.env.NODE_ENV === 'development') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'custom' });
-    app.use(vite.middlewares);
-    app.use('*', async (req, res, next) => {
-      if (req.originalUrl.startsWith('/api')) {
-        return res.status(404).json({ success: false, error: 'API endpoint not found' });
-      }
-      const url = req.originalUrl;
-      try {
-        const template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
-        let html = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
-      } catch (e: any) {
-        console.error('Vite Transformation Error:', e);
-        vite.ssrFixStacktrace(e as Error);
-        res.status(500).end(`
-          <div style="padding: 20px; font-family: sans-serif;">
-            <h1 style="color: #dc2626;">Internal Server Error (Vite)</h1>
-            <p>Failed to transform HTML for the requested route.</p>
-            <pre style="background: #f1f5f9; padding: 10px; border-radius: 4px; font-size: 12px;">${e.message}</pre>
-          </div>
-        `);
-      }
-    });
-  } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (req, res) => {
-      if (req.originalUrl.startsWith('/api')) {
-        return res.status(404).json({ success: false, error: 'API endpoint not found' });
-      }
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-    });
-  }
-
-  const port = process.env.NODE_ENV === 'production' && process.env.PORT ? Number(process.env.PORT) : 3000;
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`\n---------------------------------------------------`);
-    console.log(`🚀 LEADFORGE BACKEND READY`);
-    console.log(`📡 Listening on: http://0.0.0.0:${port}`);
-    console.log(`🔧 Mode: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`---------------------------------------------------\n`);
-  });
-}
-
-const isMainModule = process.argv[1] && (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js'));
-
-if (isMainModule && !process.env.VERCEL) {
-  startServer();
 }

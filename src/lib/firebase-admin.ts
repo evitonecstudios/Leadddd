@@ -27,6 +27,8 @@ const getAdminAuth = () => {
         firebaseConfig.projectId || 
         process.env.GCLOUD_PROJECT;
       
+      console.log(`[FIREBASE-ADMIN] Initialization attempt. Found Project ID: ${projectId || 'NONE'}`);
+      
       if (projectId) {
         initializeApp({
           projectId: projectId,
