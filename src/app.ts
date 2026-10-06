@@ -70,7 +70,13 @@ export function createServerApp() {
         diagnostics: dbStatus.diagnostics
       });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
+      console.error('[DEBUG-DB] Fatal Error:', err.message);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Database connection failed',
+        hint: 'This usually means your DATABASE_URL is missing or incorrect in Vercel settings.',
+        details: err.message 
+      });
     }
   });
 
