@@ -52,12 +52,12 @@ export function createServerApp() {
       
       console.log('[DEBUG-DB] Explicit Diagnostics Triggered');
       console.log('[DEBUG-DB] Status:', dbStatus.success ? 'CONNECTED' : 'FAILED');
-      console.log('[DEBUG-DB] URL Pattern:', dbStatus.diagnostics?.urlPattern);
+      console.log('[DEBUG-DB] Detected Host:', `${dbStatus.diagnostics?.detectedHost}:${dbStatus.diagnostics?.detectedPort}`);
       if (!dbStatus.success) {
         console.error('[DEBUG-DB] Error:', dbStatus.error);
       }
-      if (dbStatus.diagnostics?.mismatches?.length) {
-        console.warn('[DEBUG-DB] Configuration Mismatches:', dbStatus.diagnostics.mismatches);
+      if (dbStatus.diagnostics?.recommendation) {
+        console.warn('[DEBUG-DB] Recommendation:', dbStatus.diagnostics.recommendation);
       }
 
       res.json({
@@ -80,8 +80,18 @@ export function createServerApp() {
     }
   });
 
+  app.post('/api/debug/init-db', async (req, res) => {
+    try {
+      const { initDatabaseSchema } = await import('./db/index');
+      const result = await initDatabaseSchema();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.use('/api', (req, res, next) => {
-    if (req.path === '/health' || req.path === '/debug/db' || req.path === '/search-providers') return next();
+    if (req.path === '/health' || req.path === '/debug/db' || req.path === '/debug/init-db' || req.path === '/search-providers') return next();
     requireAuth(req as AuthRequest, res, next);
   });
 

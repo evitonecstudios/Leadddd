@@ -18,6 +18,8 @@ try {
   console.warn('[FIREBASE-ADMIN] Could not load config from disk, relying on env vars.');
 }
 
+const DEFAULT_PROJECT_ID = 'majestic-safeguard-nvr20';
+
 const getAdminAuth = () => {
   if (!getApps().length) {
     try {
@@ -25,20 +27,13 @@ const getAdminAuth = () => {
         process.env.VITE_FIREBASE_PROJECT_ID || 
         process.env.FIREBASE_PROJECT_ID || 
         firebaseConfig.projectId || 
-        process.env.GCLOUD_PROJECT;
+        process.env.GCLOUD_PROJECT ||
+        DEFAULT_PROJECT_ID;
       
-      console.log(`[FIREBASE-ADMIN] Initialization attempt. Found Project ID: ${projectId || 'NONE'}`);
-      
-      if (projectId) {
-        initializeApp({
-          projectId: projectId,
-        });
-        console.log('[FIREBASE-ADMIN] Initialized with Project ID:', projectId);
-      } else {
-        // Fallback to default which might use GOOGLE_APPLICATION_CREDENTIALS or metadata service
-        console.warn('[FIREBASE-ADMIN] No explicit Project ID found. Initializing with defaults.');
-        initializeApp();
-      }
+      console.log(`[FIREBASE-ADMIN] Initialization with Project ID: ${projectId}`);
+      initializeApp({
+        projectId: projectId,
+      });
     } catch (error: any) {
       console.error('[FIREBASE-ADMIN] Initialization error:', error.message);
     }

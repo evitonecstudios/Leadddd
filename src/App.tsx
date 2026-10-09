@@ -634,6 +634,42 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
   const [stats, setStats] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<any>(null);
+  const [isDiagnosing, setIsDiagnosing] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [initMsg, setInitMsg] = useState<string | null>(null);
+
+  const runDiagnostics = async () => {
+    setIsDiagnosing(true);
+    try {
+      const res = await fetch('/api/debug/db');
+      const data = await res.json();
+      setDiagnostics(data);
+    } catch (e: any) {
+      setDiagnostics({ error: 'Could not contact diagnostic endpoint: ' + e.message });
+    } finally {
+      setIsDiagnosing(false);
+    }
+  };
+
+  const handleInitDb = async () => {
+    setIsInitializing(true);
+    setInitMsg(null);
+    try {
+      const res = await fetch('/api/debug/init-db', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setInitMsg('Database tables created successfully! Reloading...');
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        setInitMsg('Init failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (e: any) {
+      setInitMsg('Init request failed: ' + e.message);
+    } finally {
+      setIsInitializing(false);
+    }
+  };
 
   useEffect(() => {
     if (token) {
@@ -646,7 +682,8 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
         if (statsRes.success) {
           setStats(statsRes.data);
         } else {
-          setError(statsRes.error || 'Failed to load stats');
+          const detail = statsRes.message || statsRes.details || statsRes.hint;
+          setError(detail ? `${statsRes.error || 'Connection Error'}: ${detail}` : (statsRes.error || 'Failed to load stats'));
         }
         if (leadsRes.success) setLeads(leadsRes.data);
       }).catch(err => {
@@ -657,30 +694,82 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
   }, [token]);
 
   if (error) {
-    const isDbIssue = error.toLowerCase().includes('database') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('password') || error.toLowerCase().includes('socket') || error.toLowerCase().includes('enotfound');
+    const isDbIssue = error.toLowerCase().includes('database') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('password') || error.toLowerCase().includes('socket') || error.toLowerCase().includes('enotfound') || error.toLowerCase().includes('relation');
     return (
-      <div className="max-w-md mx-auto p-8 my-12 bg-white rounded-2xl border border-slate-200 shadow-sm text-center space-y-4 animate-in fade-in">
+      <div className="max-w-xl mx-auto p-8 my-8 bg-white rounded-2xl border border-slate-200 shadow-sm text-center space-y-4 animate-in fade-in">
         <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center mx-auto text-red-600 shadow-sm">
           <AlertCircle className="w-6 h-6" />
         </div>
         <div className="space-y-1">
-          <h3 className="text-sm font-bold text-slate-900 tracking-tight">Dashboard Connection Error</h3>
-          <p className="text-xs text-slate-500 font-medium leading-relaxed">{error}</p>
+          <h3 className="text-base font-bold text-slate-900 tracking-tight">Dashboard Connection Error</h3>
+          <p className="text-xs text-slate-600 font-medium leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-100 font-mono text-left break-all">{error}</p>
         </div>
+
         {isDbIssue && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-left text-[11px] text-amber-900 space-y-1">
-            <p className="font-bold">Database Setup Notice for Vercel:</p>
-            <p className="leading-relaxed text-amber-800">
-              Ensure your Vercel project has <code className="bg-amber-100 font-mono font-bold px-1 rounded">DATABASE_URL</code> or <code className="bg-amber-100 font-mono font-bold px-1 rounded">POSTGRES_URL</code> configured in <strong>Project Settings &rarr; Environment Variables</strong>.
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-left text-xs text-amber-900 space-y-2">
+            <p className="font-bold flex items-center gap-1.5 text-amber-950">
+              <Lightbulb className="w-4 h-4 text-amber-600" />
+              Did you add Environment Variables in Vercel?
             </p>
+            <ul className="list-disc pl-4 space-y-1 text-amber-800 leading-relaxed text-[11px]">
+              <li><strong>Crucial:</strong> In Vercel, adding environment variables does <em>not</em> update existing deployments. You must go to <strong>Deployments &rarr; Three dots (...) &rarr; Redeploy</strong>.</li>
+              <li>Ensure <strong>Production, Preview, and Development</strong> are all checked when adding <code className="bg-amber-100 font-mono px-1 rounded">DATABASE_URL</code>.</li>
+              <li>For Supabase: Use the <strong>Connection Pooler</strong> URL on port <strong>6543</strong> (<code className="bg-amber-100 font-mono px-1 rounded">aws-0-*.pooler.supabase.com:6543</code>). Direct port 5432 fails on serverless due to IPv6.</li>
+            </ul>
           </div>
         )}
-        <div className="pt-2">
+
+        {diagnostics && (
+          <div className="p-4 bg-slate-900 text-slate-100 rounded-xl text-left text-xs font-mono space-y-2 border border-slate-800">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
+              <span className="font-bold text-emerald-400 text-[11px] uppercase tracking-wider">Live Server Diagnostics</span>
+              <span className={diagnostics.connected ? "text-emerald-400" : "text-rose-400"}>
+                {diagnostics.connected ? "DB CONNECTED" : "DB DISCONNECTED"}
+              </span>
+            </div>
+            <div className="space-y-1 text-[11px] text-slate-300">
+              <p>Tables count: <span className="text-white font-bold">{diagnostics.tables ?? 0}</span> / 17</p>
+              {diagnostics.diagnostics?.detectedHost && (
+                <p>Host: <span className="text-white">{diagnostics.diagnostics.detectedHost}:{diagnostics.diagnostics.detectedPort}</span></p>
+              )}
+              {diagnostics.diagnostics?.recommendation && (
+                <p className="text-amber-300 pt-1 font-sans">💡 {diagnostics.diagnostics.recommendation}</p>
+              )}
+              {diagnostics.error && (
+                <p className="text-rose-400 pt-1">Error: {diagnostics.error}</p>
+              )}
+            </div>
+            {diagnostics.connected && diagnostics.tables < 5 && (
+              <div className="pt-2">
+                <button
+                  onClick={handleInitDb}
+                  disabled={isInitializing}
+                  className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold font-sans transition-colors"
+                >
+                  {isInitializing ? 'Creating Tables...' : 'Initialize All 17 Database Tables Now'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {initMsg && (
+          <p className="text-xs font-bold text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">{initMsg}</p>
+        )}
+
+        <div className="pt-2 flex flex-wrap gap-2 justify-center">
           <button 
             onClick={() => window.location.reload()} 
             className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-colors shadow-sm"
           >
             Retry Connection
+          </button>
+          <button 
+            onClick={runDiagnostics} 
+            disabled={isDiagnosing}
+            className="px-4 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold uppercase tracking-widest transition-colors shadow-sm"
+          >
+            {isDiagnosing ? 'Testing...' : 'Test Server Diagnostic'}
           </button>
         </div>
       </div>
