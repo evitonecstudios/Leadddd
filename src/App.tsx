@@ -643,10 +643,30 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
     setIsDiagnosing(true);
     try {
       const res = await fetch('/api/debug/db');
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        setDiagnostics({
+          connected: false,
+          tables: 0,
+          error: `Server returned HTTP ${res.status}: ${res.statusText || 'Non-JSON response'}. ${text.slice(0, 150)}`,
+          diagnostics: {
+            recommendation: 'The serverless endpoint returned HTML or raw text. Ensure you have triggered a Redeploy in Vercel after saving your environment variables.'
+          }
+        });
+        return;
+      }
       const data = await res.json();
       setDiagnostics(data);
     } catch (e: any) {
-      setDiagnostics({ error: 'Could not contact diagnostic endpoint: ' + e.message });
+      setDiagnostics({ 
+        connected: false,
+        tables: 0,
+        error: 'Could not contact diagnostic endpoint: ' + e.message,
+        diagnostics: {
+          recommendation: 'Check network connectivity or Vercel function runtime logs.'
+        }
+      });
     } finally {
       setIsDiagnosing(false);
     }
@@ -657,6 +677,11 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
     setInitMsg(null);
     try {
       const res = await fetch('/api/debug/init-db', { method: 'POST' });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setInitMsg(`Init failed (HTTP ${res.status}): Server returned non-JSON response.`);
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         setInitMsg('Database tables created successfully! Reloading...');

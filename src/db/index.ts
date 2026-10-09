@@ -40,16 +40,16 @@ export const createPool = () => {
         global._postgresPool = new Pool({
           connectionString: connString,
           ssl: isLocal ? false : { rejectUnauthorized: false },
-          max: process.env.VERCEL ? 5 : 10,
-          connectionTimeoutMillis: 10000,
+          max: process.env.VERCEL ? 3 : 10,
+          connectionTimeoutMillis: 5000,
           idleTimeoutMillis: 30000,
         });
       } else {
         global._postgresPool = new Pool({
           host: 'localhost',
           database: 'postgres',
-          max: 10,
-          connectionTimeoutMillis: 10000,
+          max: 5,
+          connectionTimeoutMillis: 3000,
         });
       }
     }
@@ -115,6 +115,13 @@ export async function checkDbHealth() {
       recommendation: null as string | null,
     }
   };
+
+  if (!connString && (process.env.VERCEL || process.env.NODE_ENV === 'production')) {
+    result.error = 'DATABASE_URL environment variable is not defined.';
+    result.code = 'NO_DATABASE_URL';
+    result.diagnostics.recommendation = 'In Vercel -> Project Settings -> Environment Variables, add DATABASE_URL (Supabase Transaction Pooler port 6543), then trigger a Redeploy.';
+    return result;
+  }
 
   try {
     const res = await p.query('SELECT 1');
