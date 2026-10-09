@@ -36,15 +36,19 @@ export class GridPartitionService {
    */
   static async getBoundingBox(location: string): Promise<BoundingBox | null> {
     try {
+      const cleanLocation = location?.trim();
+      if (!cleanLocation) return null;
+
       const response = await axios.get('https://nominatim.openstreetmap.org/search', {
         params: {
-          q: location,
+          q: cleanLocation,
           format: 'json',
           limit: 1
         },
         headers: {
           'User-Agent': 'LeadForge-Discovery-Engine/1.0'
-        }
+        },
+        timeout: 10000
       });
 
       if (response.data && response.data.length > 0) {
@@ -76,10 +80,35 @@ export class GridPartitionService {
     // Big city area is 0.1 - 0.5
     // Country area is > 1.0
 
-    if (targetCount <= 50) return 1; // Single query
-    if (targetCount <= 100) return 2; // 4 cells
-    if (targetCount <= 250) return 3; // 9 cells
-    if (targetCount <= 500) return 4; // 16 cells
-    return 5; // 25 cells (max for now)
+    if (area > 5.0) return 8; // Country scale (64 cells)
+    if (area > 1.0) return 6; // Region scale (36 cells)
+    if (area > 0.3) return 4; // Large Metro scale (16 cells)
+    
+    if (targetCount <= 30) return 1; 
+    if (targetCount <= 80) return 2; 
+    if (targetCount <= 200) return 3; 
+    if (targetCount <= 500) return 4;
+    return 5;
+  }
+
+  /**
+   * Expands a bounding box by a multiplier while keeping it centered.
+   * multiplier 1.5 = 50% larger on each axis.
+   */
+  static expandBoundingBox(bbox: BoundingBox, multiplier: number): BoundingBox {
+    const latDiff = bbox.maxLat - bbox.minLat;
+    const lonDiff = bbox.maxLon - bbox.minLon;
+    const centerLat = (bbox.minLat + bbox.maxLat) / 2;
+    const centerLon = (bbox.minLon + bbox.maxLon) / 2;
+    
+    const halfLat = (latDiff * multiplier) / 2;
+    const halfLon = (lonDiff * multiplier) / 2;
+    
+    return {
+      minLat: centerLat - halfLat,
+      maxLat: centerLat + halfLat,
+      minLon: centerLon - halfLon,
+      maxLon: centerLon + halfLon
+    };
   }
 }

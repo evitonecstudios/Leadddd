@@ -33,11 +33,14 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
             'Origin': 'https://lite.duckduckgo.com'
           },
           timeout: 8000,
-          validateStatus: (status) => status === 200 // Fail on 403/other
+          validateStatus: (status) => status === 200 || status === 202
         }
       );
 
-      if (!response.data) return [];
+      if (!response.data || response.status === 202) {
+        if (response.status === 202) console.warn('[DuckDuckGoSearchProvider] Received 202 Accepted - results might be delayed or throttled.');
+        return [];
+      }
       const $ = cheerio.load(response.data);
       const results: SearchResult[] = [];
 
@@ -45,7 +48,7 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
       const EXCLUDED_DOMAINS = [
         'duckduckgo.com', 'wikipedia.org', 'wikidata.org', 'yelp.', 'tripadvisor.', 
         'yellowpages.', 'pagesjaunes.fr', 'facebook.com', 'instagram.com', 'linkedin.com',
-        'twitter.com', 'x.com', 'pinterest.', 'tiktok.com', 'youtube.com'
+        'twitter.com', 'x.com', 'pinterest.', 'tiktok.com', 'youtube.com', 'mapp.apple.com'
       ];
 
       $('a.result-link').each((_, el) => {
@@ -76,6 +79,8 @@ export class DuckDuckGoSearchProvider implements SearchProvider {
     } catch (err: any) {
       if (err.response?.status === 403) {
         console.warn(`[DuckDuckGoSearchProvider] Access blocked (403). Automated requests are being restricted by the provider.`);
+      } else if (err.response?.status === 202) {
+        console.warn(`[DuckDuckGoSearchProvider] Throttled (202). Provider is processing the request but not returning results yet.`);
       } else {
         console.warn(`[DuckDuckGoSearchProvider] Search notice: ${err.message}`);
       }
@@ -131,7 +136,12 @@ export class GeminiSearchProvider implements SearchProvider {
 
       return [];
     } catch (err: any) {
-      console.warn(`[GeminiSearchProvider] Search failed: ${err.message}`);
+      const isQuotaError = err.message?.includes('429') || err.status === 429 || err.message?.includes('RESOURCE_EXHAUSTED');
+      if (isQuotaError) {
+        console.warn('[GeminiSearchProvider] Quota exceeded (429). Falling back to other providers.');
+      } else {
+        console.warn(`[GeminiSearchProvider] Search failed: ${err.message}`);
+      }
       return [];
     }
   }

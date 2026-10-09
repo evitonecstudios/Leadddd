@@ -200,7 +200,8 @@ export class OpportunityService {
     return {
       leadId,
       opportunityScore: totalScore,
-      opportunitiesCount: newOpportunities.length
+      opportunitiesCount: newOpportunities.length,
+      opportunities: newOpportunities
     };
   }
 }

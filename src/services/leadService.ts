@@ -56,38 +56,98 @@ export class ValidationService {
     const clean = phone.replace(/[^\d]/g, '');
     return clean.length >= 7 && clean.length <= 15;
   }
+
+  static isInvalidBusinessName(name?: string | null): boolean {
+    if (!name) return true;
+    const trimmed = name.trim();
+    if (trimmed.length < 2) return true;
+    // Must contain actual alphabetical characters
+    if (!/[a-zA-Z\u00C0-\u024F]/.test(trimmed)) return true;
+
+    const lower = trimmed.toLowerCase();
+    // Exclude generic urban features, public utilities, and placeholder names
+    const genericBlocked = [
+      'unnamed', 'unknown', 'n/a', 'sans nom', 'point of interest', 'parking', 'abri bus', 'bus stop',
+      'toilettes', 'toilet', 'wc', 'poste', 'boite aux lettres', 'post box', 'distributeur',
+      'atm', 'substation', 'borne de recharge', 'recycling', 'poubelle', 'banc', 'bench',
+      'calvaire', 'statue', 'monument', 'fontaine', 'cimetiere', 'cemetery', 'test',
+      'chantier', 'batiment', 'building', 'residential', 'maison', 'residence', 'immeuble',
+      'arret', 'gare', 'station service', 'station essence', 'lavoir', 'eglise'
+    ];
+    if (genericBlocked.some(b => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower.startsWith(b + ' ') || lower.endsWith(' ' + b))) {
+      return true;
+    }
+    // Block pure numbers or pure street addresses with no trade/company name (e.g. "42 Rue de la Paix")
+    if (/^\d+\s+(rue|avenue|boulevard|chemin|allee|route|place|str\.|strasse|gasse|street|road|ave)/i.test(lower)) {
+      return true;
+    }
+    return false;
+  }
+
+  static isVerifiedBusiness(data: any, strictContact: boolean = false): boolean {
+    if (this.isInvalidBusinessName(data.companyName)) return false;
+
+    const hasPhone = Boolean(data.phone && data.phone.trim().length >= 6);
+    const hasWebsite = Boolean(data.website && data.website.trim().length >= 4);
+    const hasEmail = Boolean(data.email && this.validateEmail(data.email));
+    const hasAddress = Boolean(data.address && data.address.trim().length >= 6);
+
+    if (strictContact) {
+      // Must have at least one direct communication channel
+      return hasPhone || hasWebsite || hasEmail;
+    }
+
+    // Must either have direct communication channel or verifiable location with valid name
+    return hasPhone || hasWebsite || hasEmail || hasAddress;
+  }
 }
 
 export class LeadService {
-  static async createLead(data: any, campaignId?: number) {
+  static async createLead(data: any, campaignId?: number, options?: { requireVerifiedContact?: boolean }) {
+    // 0. Strict Lead Verification Check
+    if (ValidationService.isInvalidBusinessName(data.companyName)) {
+      return { lead: null, status: 'rejected_unverified' as const };
+    }
+
+    if (options?.requireVerifiedContact && !ValidationService.isVerifiedBusiness(data, true)) {
+      return { lead: null, status: 'rejected_unverified' as const };
+    }
+
     const normalizedName = NormalizationService.normalizeCompanyName(data.companyName || '');
     const normalizedDomain = NormalizationService.normalizeDomain(data.website);
     const normalizedPhone = NormalizationService.normalizePhone(data.phone);
 
-    // 1. Multi-factor Deduplication
+    // 1. Multi-factor Deduplication (scoped to campaign if provided)
     let existingLead: any = null;
 
     // Check by Domain
     if (normalizedDomain) {
       existingLead = await db.query.leads.findFirst({
-        where: eq(leads.normalizedDomain, normalizedDomain),
+        where: campaignId 
+          ? and(eq(leads.campaignId, campaignId), eq(leads.normalizedDomain, normalizedDomain))
+          : eq(leads.normalizedDomain, normalizedDomain),
       });
     }
 
     // Check by Phone
     if (!existingLead && normalizedPhone && normalizedPhone.length >= 7) {
       existingLead = await db.query.leads.findFirst({
-        where: eq(leads.normalizedPhone, normalizedPhone),
+        where: campaignId
+          ? and(eq(leads.campaignId, campaignId), eq(leads.normalizedPhone, normalizedPhone))
+          : eq(leads.normalizedPhone, normalizedPhone),
       });
     }
 
     // Check by Company Name + City (prevents duplicate cells from duplicating contact-less businesses)
     if (!existingLead && normalizedName && (data.city || data.address)) {
+      const conds = [
+        eq(leads.normalizedCompanyName, normalizedName),
+        data.city ? eq(leads.city, data.city) : undefined,
+        campaignId ? eq(leads.campaignId, campaignId) : undefined
+      ].filter(Boolean);
+
       existingLead = await db.query.leads.findFirst({
-        where: and(
-          eq(leads.normalizedCompanyName, normalizedName),
-          data.city ? eq(leads.city, data.city) : undefined
-        ),
+        where: and(...(conds as any[])),
       });
     }
 

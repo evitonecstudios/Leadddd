@@ -1,4 +1,4 @@
-import { LeadSource, RawLead } from './types.ts';
+import type { LeadSource, RawLead } from './types.ts';
 
 export interface CSVMappedData {
   rows: any[];

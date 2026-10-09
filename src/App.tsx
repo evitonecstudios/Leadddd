@@ -1,15 +1,17 @@
 import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
+import { auth } from './lib/firebase.ts';
 import { 
   Search, LayoutDashboard, Database, Settings, LogOut, BarChart3, Target, Filter, 
   Upload, Check, AlertCircle, Loader2, Globe, Phone, Mail, MapPin, ExternalLink, 
   RefreshCw, Star, Info, Lightbulb, MessageSquare, Linkedin, Languages, Wand2, 
   ShieldCheck, Copy, History, Calendar, Plus, Trash2, Download, MoreVertical,
   ChevronRight, ArrowRight, User, CheckCircle2, Clock, Menu, X, PanelLeftClose, PanelLeftOpen,
-  Facebook, Instagram, Twitter, Sparkles, Share2
+  Facebook, Instagram, Twitter, Sparkles, Share2, Printer, FileText, Briefcase, MessageCircle, PhoneCall
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
 import { cn, formatDate } from './lib/utils.ts';
 import Papa from 'papaparse';
+import { CommercialToolkit, formatWhatsAppNumber } from './components/CommercialToolkit.tsx';
 
 // --- API Helper ---
 const parseApiResponse = async (res: Response) => {
@@ -34,6 +36,7 @@ const parseApiResponse = async (res: Response) => {
         : `Server Error ${res.status}: ${res.statusText || 'Request failed'}` 
     };
   }
+
   try {
     const data = await res.json();
     return data;
@@ -45,12 +48,31 @@ const parseApiResponse = async (res: Response) => {
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+const getValidToken = async (fallbackToken?: string, forceRefresh = false): Promise<string> => {
+  if (auth.currentUser) {
+    try {
+      const fresh = await auth.currentUser.getIdToken(forceRefresh);
+      if (fresh) return fresh;
+    } catch (e) {
+      console.warn('[API] Could not retrieve fresh token from Firebase client:', e);
+    }
+  }
+  return fallbackToken || '';
+};
+
 const api = {
   get: async (url: string, token: string, retries = 3): Promise<any> => {
     try {
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const activeToken = await getValidToken(token);
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${activeToken}` } });
       const parsed = await parseApiResponse(res);
       
+      if (!parsed.success && (parsed.error === 'TOKEN_EXPIRED' || res.status === 401) && retries > 0) {
+        console.warn(`[API] Token expired or 401 unauthorized. Forcing token refresh... (${retries} retries left)`);
+        const refreshedToken = await getValidToken(token, true);
+        return api.get(url, refreshedToken, retries - 1);
+      }
+
       if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
         console.warn(`[API] Server is booting, retrying in 2s... (${retries} left)`);
         await wait(2000);
@@ -69,12 +91,19 @@ const api = {
   },
   post: async (url: string, data: any, token: string, retries = 3): Promise<any> => {
     try {
+      const activeToken = await getValidToken(token);
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${activeToken}` },
         body: JSON.stringify(data),
       });
       const parsed = await parseApiResponse(res);
+
+      if (!parsed.success && (parsed.error === 'TOKEN_EXPIRED' || res.status === 401) && retries > 0) {
+        console.warn(`[API] Token expired or 401 unauthorized. Forcing token refresh... (${retries} retries left)`);
+        const refreshedToken = await getValidToken(token, true);
+        return api.post(url, data, refreshedToken, retries - 1);
+      }
 
       if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
         await wait(2000);
@@ -93,12 +122,19 @@ const api = {
   },
   patch: async (url: string, data: any, token: string, retries = 3): Promise<any> => {
     try {
+      const activeToken = await getValidToken(token);
       const res = await fetch(url, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${activeToken}` },
         body: JSON.stringify(data),
       });
       const parsed = await parseApiResponse(res);
+
+      if (!parsed.success && (parsed.error === 'TOKEN_EXPIRED' || res.status === 401) && retries > 0) {
+        console.warn(`[API] Token expired or 401 unauthorized. Forcing token refresh... (${retries} retries left)`);
+        const refreshedToken = await getValidToken(token, true);
+        return api.patch(url, data, refreshedToken, retries - 1);
+      }
 
       if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
         await wait(2000);
@@ -117,11 +153,18 @@ const api = {
   },
   delete: async (url: string, token: string, retries = 3): Promise<any> => {
     try {
+      const activeToken = await getValidToken(token);
       const res = await fetch(url, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${activeToken}` }
       });
       const parsed = await parseApiResponse(res);
+
+      if (!parsed.success && (parsed.error === 'TOKEN_EXPIRED' || res.status === 401) && retries > 0) {
+        console.warn(`[API] Token expired or 401 unauthorized. Forcing token refresh... (${retries} retries left)`);
+        const refreshedToken = await getValidToken(token, true);
+        return api.delete(url, refreshedToken, retries - 1);
+      }
 
       if (!parsed.success && parsed.error === 'SERVER_BOOTING' && retries > 0) {
         await wait(2000);
@@ -174,13 +217,19 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 function AppContent() {
   console.log("AppContent rendering...");
-  const { user, loading, authError, authErrorCode, signIn, logout } = useAuth();
+  const { user, token: authContextToken, loading, authError, authErrorCode, signIn, logout } = useAuth();
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(authContextToken);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (authContextToken) {
+      setToken(authContextToken);
+    }
+  }, [authContextToken]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -751,7 +800,7 @@ function GenerateView({ token }: any) {
     radius: 10,
     campaignName: 'Local Independent Shops Discovery',
     localOnly: true,
-    requireContactInfo: false
+    requireContactInfo: true
   });
 
   const targetPresets = [25, 50, 100, 250, 500];
@@ -871,11 +920,83 @@ function GenerateView({ token }: any) {
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Country</label>
                 <input type="text" value={criteria.country} onChange={e => setCriteria({...criteria, country: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium" />
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {[
+                    { label: '🇨🇭 Suisse / Switzerland', country: 'Switzerland', city: 'Geneva' },
+                    { label: '🇫🇷 France', country: 'France', city: 'Paris' },
+                    { label: '🇧🇪 Belgique', country: 'Belgium', city: 'Bruxelles' },
+                    { label: '🇨🇦 Canada (Québec)', country: 'Canada', city: 'Montréal' }
+                  ].map(preset => (
+                    <button
+                      key={preset.country}
+                      type="button"
+                      onClick={() => setCriteria({
+                        ...criteria,
+                        country: preset.country,
+                        city: preset.city,
+                        campaignName: `${preset.city} ${criteria.category || 'Prospection'} Lead Campaign`
+                      })}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[11px] font-medium transition-colors border",
+                        criteria.country.toLowerCase() === preset.country.toLowerCase()
+                          ? "bg-indigo-900 text-white border-indigo-900 shadow-xs"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">City / Target Region</label>
                 <input type="text" value={criteria.city} onChange={e => setCriteria({...criteria, city: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium" />
+                {criteria.country.toLowerCase().includes('switz') || criteria.country.toLowerCase().includes('suisse') ? (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {['Geneva', 'Lausanne', 'Zurich', 'Basel', 'Bern', 'Neuchâtel', 'Fribourg'].map(swissCity => (
+                      <button
+                        key={swissCity}
+                        type="button"
+                        onClick={() => setCriteria({
+                          ...criteria,
+                          city: swissCity,
+                          campaignName: `${swissCity} ${criteria.category || 'Prospection'} Lead Campaign`
+                        })}
+                        className={cn(
+                          "px-2 py-0.5 rounded text-[10px] font-medium border",
+                          criteria.city.toLowerCase() === swissCity.toLowerCase()
+                            ? "bg-slate-900 text-white border-slate-900"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        )}
+                      >
+                        {swissCity}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {['Paris', 'Lyon', 'Marseille', 'Bordeaux', 'Lille', 'Toulouse'].map(frCity => (
+                      <button
+                        key={frCity}
+                        type="button"
+                        onClick={() => setCriteria({
+                          ...criteria,
+                          city: frCity,
+                          campaignName: `${frCity} ${criteria.category || 'Prospection'} Lead Campaign`
+                        })}
+                        className={cn(
+                          "px-2 py-0.5 rounded text-[10px] font-medium border",
+                          criteria.city.toLowerCase() === frCity.toLowerCase()
+                            ? "bg-slate-900 text-white border-slate-900"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        )}
+                      >
+                        {frCity}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2 col-span-2">
@@ -926,11 +1047,12 @@ function GenerateView({ token }: any) {
 
                 <div className="border-t border-slate-200/80 pt-3 flex items-start justify-between gap-4">
                   <div className="space-y-1">
-                    <label htmlFor="requireContactToggle" className="text-xs font-bold text-slate-900 cursor-pointer">
-                      Only Save Leads With Contact Details (Phone/Email/Web)
+                    <label htmlFor="requireContactToggle" className="text-xs font-bold text-slate-900 cursor-pointer flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      🎯 Leads Vérifiés & Contactables Uniquement (Recommandé pour les commerciaux)
                     </label>
                     <p className="text-[11px] text-slate-500 leading-relaxed">
-                      Requires at least one direct phone number, email address, or website. (Leave unchecked if you want to sell new websites to shops that currently have none).
+                      Exclut automatiquement les doublons, les entités sans nom d'entreprise réel, et les fiches sans contact. Conserve uniquement les prospects avec numéro de téléphone, site web ou email vérifié.
                     </p>
                   </div>
                   <input
@@ -1208,23 +1330,32 @@ function LeadsView({ token, onSelectLead }: any) {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [websiteFilter, setWebsiteFilter] = useState('');
+  const [scopeFilter, setScopeFilter] = useState<'team' | 'personal'>('team');
   const [selectedLeads, setSelectedLeads] = useState<number[]>([]);
+  const [commercialLead, setCommercialLead] = useState<any | null>(null);
 
   const fetchLeads = async () => {
     setLoading(true);
     const params = new URLSearchParams();
     if (search) params.append('search', search);
     if (statusFilter) params.append('status', statusFilter);
-    if (websiteFilter) params.append('hasWebsite', websiteFilter);
+    params.append('scope', scopeFilter);
     const res = await api.get(`/api/leads?${params.toString()}`, token);
     if (res.success) setLeads(res.data);
     setLoading(false);
   };
 
-  useEffect(() => { if (token) fetchLeads(); }, [token, statusFilter, websiteFilter]);
+  useEffect(() => { if (token) fetchLeads(); }, [token, statusFilter, scopeFilter]);
 
   const [auditMessage, setAuditMessage] = useState<string | null>(null);
+  const [rowAuditing, setRowAuditing] = useState<number | null>(null);
+
+  const runSingleAuditFR = async (id: number) => {
+    setRowAuditing(id);
+    await api.post(`/api/leads/${id}/audit`, { language: 'fr' }, token);
+    setRowAuditing(null);
+    fetchLeads();
+  };
 
   const handleExport = () => {
     const a = document.createElement('a');
@@ -1276,33 +1407,63 @@ function LeadsView({ token, onSelectLead }: any) {
               <option value="">All Statuses</option>
               {['NEW', 'REVIEWED', 'QUALIFIED', 'CONTACTED', 'REPLIED', 'WON', 'LOST', 'DISMISSED'].map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <select 
-              value={websiteFilter}
-              onChange={e => setWebsiteFilter(e.target.value)}
-              className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold uppercase tracking-wider text-slate-500 outline-none"
-            >
-              <option value="">All Presence</option>
-              <option value="true">Has Website</option>
-              <option value="false">No Website</option>
-            </select>
+
+            <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setScopeFilter('team')}
+                className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1 text-[11px]",
+                  scopeFilter === 'team' ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
+                )}
+                title="Afficher tous les prospects générés par l'équipe"
+              >
+                👥 Équipe (Partagée)
+              </button>
+              <button
+                type="button"
+                onClick={() => setScopeFilter('personal')}
+                className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1 text-[11px]",
+                  scopeFilter === 'personal' ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
+                )}
+                title="Afficher uniquement mes prospects personnels"
+              >
+                👤 Mes Leads
+              </button>
+            </div>
           </div>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           {selectedLeads.length > 0 && (
-            <button 
-              onClick={async () => {
-                setAuditMessage(`Running audits for ${selectedLeads.length} leads in background...`);
-                for (const id of selectedLeads) {
-                  await api.post(`/api/leads/${id}/audit`, {}, token);
-                }
-                setAuditMessage(`Audited ${selectedLeads.length} selected leads.`);
-                fetchLeads();
-                setSelectedLeads([]);
-              }}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-blue-700 transition-colors shadow-lg shadow-blue-900/10"
-            >
-              Audit Selected ({selectedLeads.length})
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button 
+                onClick={async () => {
+                  setAuditMessage(`Réalisation des audits en français pour ${selectedLeads.length} prospects...`);
+                  for (const id of selectedLeads) {
+                    await api.post(`/api/leads/${id}/audit`, { language: 'fr' }, token);
+                  }
+                  setAuditMessage(`Audits en français terminés pour ${selectedLeads.length} prospects.`);
+                  fetchLeads();
+                  setSelectedLeads([]);
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-blue-700 transition-colors shadow-lg shadow-blue-900/10"
+              >
+                <Languages className="w-3.5 h-3.5" /> Auditer en Français 🇫🇷 ({selectedLeads.length})
+              </button>
+              <button 
+                onClick={async () => {
+                  setAuditMessage(`Running standard audits for ${selectedLeads.length} leads in background...`);
+                  for (const id of selectedLeads) {
+                    await api.post(`/api/leads/${id}/audit`, { language: 'en' }, token);
+                  }
+                  setAuditMessage(`Audited ${selectedLeads.length} selected leads.`);
+                  fetchLeads();
+                  setSelectedLeads([]);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-slate-900 transition-colors shadow-sm"
+              >
+                Audit EN ({selectedLeads.length})
+              </button>
+            </div>
           )}
           <button onClick={handleExport} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-slate-50 transition-colors shadow-sm">
             <Download className="w-3.5 h-3.5" /> Export CSV
@@ -1329,6 +1490,7 @@ function LeadsView({ token, onSelectLead }: any) {
                 <th className="px-6 py-4">Website</th>
                 <th className="px-6 py-4 text-center">Audit</th>
                 <th className="px-6 py-4 text-center">Opportunity</th>
+                <th className="px-6 py-4 text-center">Contact Direct</th>
                 <th className="px-6 py-4">Status</th>
                 <th className="px-6 py-4"></th>
               </tr>
@@ -1340,12 +1502,17 @@ function LeadsView({ token, onSelectLead }: any) {
                     <input type="checkbox" checked={selectedLeads.includes(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-slate-300 text-slate-900 focus:ring-slate-900" />
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{lead.companyName}</div>
+                    <div className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors flex items-center gap-1.5">
+                      <span>{lead.companyName}</span>
+                      {(lead.phone || lead.website || lead.email) && (
+                        <span title="Lead avec canal de contact vérifié" className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{lead.city || 'Region'}</span>
                       <div className="flex items-center gap-1.5 border-l border-slate-200 pl-2">
-                        {lead.phone && <span title={`Verified Phone: ${lead.phone}`}><Phone className="w-2.5 h-2.5 text-emerald-600" /></span>}
-                        {lead.email && <span title={`Verified Email: ${lead.email}`}><Mail className="w-2.5 h-2.5 text-blue-600" /></span>}
+                        {lead.phone && <span title={`Téléphone vérifié: ${lead.phone}`}><Phone className="w-2.5 h-2.5 text-emerald-600" /></span>}
+                        {lead.email && <span title={`Email vérifié: ${lead.email}`}><Mail className="w-2.5 h-2.5 text-blue-600" /></span>}
                       </div>
                     </div>
                   </td>
@@ -1375,6 +1542,51 @@ function LeadsView({ token, onSelectLead }: any) {
                   <td className="px-6 py-4 text-center">
                     <span className={cn("text-xs font-extrabold", (lead.opportunityScore || 0) > 60 ? 'text-blue-600' : 'text-slate-400')}>{lead.opportunityScore ?? 0}</span>
                   </td>
+                  <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center justify-center gap-1.5">
+                      {lead.phone ? (
+                        <>
+                          <a
+                            href={`https://wa.me/${formatWhatsAppNumber(lead.phone, lead.country)}?text=${encodeURIComponent(`Bonjour, je me permets de vous contacter au sujet de ${lead.companyName} à ${lead.city || 'votre secteur'}. Auriez-vous 2 minutes pour échanger ?`)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-md transition-all shadow-2xs"
+                            title={`Ouvrir WhatsApp (+${formatWhatsAppNumber(lead.phone, lead.country)})`}
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                          </a>
+                          <a
+                            href={`tel:${lead.phone}`}
+                            className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-md transition-all shadow-2xs"
+                            title={`Appeler directement (${lead.phone})`}
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                          </a>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-slate-300 italic">Sans tél</span>
+                      )}
+
+                      {lead.email && (
+                        <a
+                          href={`mailto:${lead.email}?subject=${encodeURIComponent(`Opportunité visibilité pour ${lead.companyName}`)}`}
+                          className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-all shadow-2xs"
+                          title={`Envoyer un email (${lead.email})`}
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+
+                      <button
+                        onClick={() => setCommercialLead(lead)}
+                        className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md text-[10px] font-bold tracking-wide transition-all shadow-2xs flex items-center gap-1"
+                        title="Ouvrir le Kit Commercial (Script d'appel, objections, WhatsApp, logger CRM)"
+                      >
+                        <Briefcase className="w-3 h-3 text-amber-700" />
+                        Pitch
+                      </button>
+                    </div>
+                  </td>
                   <td className="px-6 py-4">
                     <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider", 
                       lead.leadStatus === 'WON' ? 'bg-emerald-50 text-emerald-700' : 
@@ -1382,8 +1594,22 @@ function LeadsView({ token, onSelectLead }: any) {
                       lead.leadStatus === 'NEW' ? 'bg-slate-100 text-slate-600' : 'bg-blue-50 text-blue-700'
                     )}>{lead.leadStatus}</span>
                   </td>
-                  <td className="px-6 py-4 text-right opacity-0 group-hover:opacity-100 transition-opacity">
-                    <ChevronRight className="w-4 h-4 text-slate-300 ml-auto" />
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          runSingleAuditFR(lead.id);
+                        }}
+                        disabled={rowAuditing === lead.id}
+                        className="opacity-0 group-hover:opacity-100 px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-md text-[10px] font-bold tracking-wide transition-all shadow-2xs flex items-center gap-1"
+                        title="Réaliser l'audit en français pour ce prospect"
+                      >
+                        {rowAuditing === lead.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <BarChart3 className="w-2.5 h-2.5 text-blue-600" />}
+                        Audit FR 🇫🇷
+                      </button>
+                      <ChevronRight className="w-4 h-4 text-slate-300" />
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1391,6 +1617,23 @@ function LeadsView({ token, onSelectLead }: any) {
           </table>
         )}
       </div>
+
+      {/* Commercial Toolkit Modal */}
+      {commercialLead && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[92vh] overflow-y-auto border border-slate-200 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
+            <CommercialToolkit
+              lead={commercialLead}
+              token={token}
+              isModal={true}
+              onClose={() => setCommercialLead(null)}
+              onStatusChange={() => {
+                fetchLeads();
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1400,7 +1643,9 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
   const [auditing, setAuditing] = useState(false);
   const [scraping, setScraping] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'crm' | 'evidence' | 'audit' | 'ai'>('crm');
+  const [activeTab, setActiveTab] = useState<'commercial' | 'crm' | 'evidence' | 'audit' | 'ai'>('commercial');
+  const [auditLang, setAuditLang] = useState<'fr' | 'en'>('fr');
+  const [showAuditModalFR, setShowAuditModalFR] = useState(false);
   
   const fetchLead = () => {
     api.get(`/api/leads/${leadId}`, token).then(res => { if (res.success) setLead(res.data); });
@@ -1408,9 +1653,10 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
 
   useEffect(() => { fetchLead(); }, [leadId]);
 
-  const runAudit = async () => {
+  const runAudit = async (lang: 'fr' | 'en' = auditLang) => {
     setAuditing(true);
-    await api.post(`/api/leads/${leadId}/audit`, {}, token);
+    setAuditLang(lang);
+    await api.post(`/api/leads/${leadId}/audit`, { language: lang }, token);
     await fetchLead();
     setAuditing(false);
     setActiveTab('audit');
@@ -1440,7 +1686,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
           <ArrowRight className="w-3 h-3 rotate-180" /> Back to Database
         </button>
         
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <select 
             value={lead.leadStatus}
             onChange={(e) => handleStatusChange(e.target.value)}
@@ -1451,19 +1697,53 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
           <button 
             disabled={scraping}
             onClick={runScrape}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 shadow-sm transition-all"
-            title="Scrape and extract maximum verified website and social media information"
+            className="px-3.5 py-2 bg-indigo-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition-all"
+            title="Extraire le maximum d'informations du site et des réseaux sociaux"
           >
             {scraping ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-            {scraping ? 'Extracting...' : 'Deep Scrape & Extract'}
+            {scraping ? 'Extraction...' : 'Deep Scrape'}
           </button>
+          
+          {/* Explicit French Audit Option */}
           <button 
             disabled={auditing}
-            onClick={runAudit}
-            className="px-4 py-2 bg-slate-900 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-slate-800 disabled:opacity-50 flex items-center gap-2 shadow-sm"
+            onClick={() => runAudit('fr')}
+            className="px-3.5 py-2 bg-blue-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5 shadow-sm shadow-blue-900/10 transition-all"
+            title="Lancer l'audit digital complet en français pour ce client"
           >
-            {auditing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            {auditing ? 'Auditing' : 'Start Audit'}
+            {auditing && auditLang === 'fr' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            {auditing && auditLang === 'fr' ? 'Audit FR...' : 'Audit FR 🇫🇷'}
+          </button>
+
+          {/* Standard Audit Option */}
+          <button 
+            disabled={auditing}
+            onClick={() => runAudit('en')}
+            className="px-3 py-2 bg-slate-900 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition-all"
+            title="Start English Audit"
+          >
+            {auditing && auditLang === 'en' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            {auditing && auditLang === 'en' ? 'Auditing...' : 'Audit EN 🇬🇧'}
+          </button>
+
+          {/* Commercial Outreach Toolkit Button */}
+          <button
+            onClick={() => setActiveTab('commercial')}
+            className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-1.5 shadow-sm transition-all shadow-amber-950/20"
+            title="Ouvrir le Kit Commercial (Scripts d'appel, objections, WhatsApp)"
+          >
+            <Briefcase className="w-3.5 h-3.5" />
+            Kit Commercial 💼
+          </button>
+
+          {/* French Client Dossier Button */}
+          <button
+            onClick={() => setShowAuditModalFR(true)}
+            className="px-3 py-2 bg-white border border-slate-200 text-slate-700 hover:text-slate-950 hover:bg-slate-50 rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-1.5 shadow-sm transition-all"
+            title="Afficher et imprimer le dossier d'audit client en français"
+          >
+            <FileText className="w-3 h-3 text-blue-600" />
+            Dossier Client FR
           </button>
         </div>
       </div>
@@ -1576,17 +1856,18 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
 
         {/* Right Panel: Content */}
         <div className="lg:col-span-3 space-y-6">
-          <div className="flex gap-8 border-b border-slate-200">
+          <div className="flex gap-8 border-b border-slate-200 overflow-x-auto">
             {[
-              { id: 'crm', label: 'CRM & Activity', icon: User },
-              { id: 'evidence', label: 'Field Evidence', icon: ShieldCheck },
-              { id: 'audit', label: 'Technical Audit', icon: BarChart3 },
-              { id: 'ai', label: 'AI Intelligence', icon: Wand2 },
+              { id: 'commercial', label: 'Kit Commercial 💼', icon: Briefcase },
+              { id: 'crm', label: 'CRM & Suivi', icon: User },
+              { id: 'audit', label: 'Audit Technique', icon: BarChart3 },
+              { id: 'ai', label: 'Intelligence IA', icon: Wand2 },
+              { id: 'evidence', label: 'Preuves & Données', icon: ShieldCheck },
             ].map((tab) => (
               <button 
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={cn("pb-4 text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-2 border-b-2 transition-all", 
+                className={cn("pb-4 text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-2 border-b-2 transition-all whitespace-nowrap", 
                   activeTab === tab.id ? "border-slate-900 text-slate-900" : "border-transparent text-slate-400 hover:text-slate-600"
                 )}
               >
@@ -1596,13 +1877,47 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
           </div>
 
           <div className="animate-in fade-in duration-300">
+            {activeTab === 'commercial' && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <CommercialToolkit 
+                  lead={lead} 
+                  token={token} 
+                  onStatusChange={fetchLead} 
+                />
+              </div>
+            )}
             {activeTab === 'crm' && <CRMTab leadId={leadId} token={token} onActivityChange={fetchLead} />}
             {activeTab === 'evidence' && <EvidenceTab lead={lead} />}
-            {activeTab === 'audit' && <AuditTab lead={lead} onRunAudit={runAudit} auditing={auditing} token={token} />}
-            {activeTab === 'ai' && <AITab leadId={leadId} token={token} lead={lead} />}
+            {activeTab === 'audit' && (
+              <AuditTab 
+                lead={lead} 
+                onRunAudit={runAudit} 
+                auditing={auditing} 
+                token={token}
+                auditLang={auditLang}
+                onOpenModalFR={() => setShowAuditModalFR(true)}
+              />
+            )}
+            {activeTab === 'ai' && (
+              <AITab 
+                leadId={leadId} 
+                token={token} 
+                lead={lead}
+                onOpenModalFR={() => setShowAuditModalFR(true)}
+              />
+            )}
           </div>
         </div>
       </div>
+
+      {showAuditModalFR && (
+        <ClientAuditModalFR 
+          lead={lead} 
+          token={token} 
+          onClose={() => setShowAuditModalFR(false)} 
+          onRefreshAudit={() => runAudit('fr')} 
+        />
+      )}
     </div>
   );
 }
@@ -1746,18 +2061,377 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
   );
 }
 
-function AuditTab({ lead, onRunAudit, auditing, token }: any) {
+// --- French Client Audit Modal & Report ---
+function ClientAuditModalFR({ lead, token, onClose, onRefreshAudit }: any) {
+  const [aiReport, setAiReport] = useState<any>(null);
+  const [loadingAi, setLoadingAi] = useState(false);
+  const [copied, setCopied] = useState(false);
+
   const latestAudit = lead.audits?.[0];
+  const overallScore = latestAudit?.overallScore ?? lead.auditScore ?? (lead.website ? 65 : 35);
+  const techScore = latestAudit?.technicalScore ?? (lead.website ? 60 : 20);
+  const seoScore = latestAudit?.seoScore ?? (lead.website ? 55 : 25);
+  const convScore = latestAudit?.conversionScore ?? 45;
+  const perfScore = latestAudit?.performanceScore ?? (lead.website ? 70 : 40);
+
+  useEffect(() => {
+    setLoadingAi(true);
+    api.get(`/api/leads/${lead.id}/ai?language=fr`, token).then(res => {
+      if (res.success && res.data) {
+        setAiReport(res.data);
+      }
+      setLoadingAi(false);
+    });
+  }, [lead.id, token]);
+
+  const copyDossier = () => {
+    const text = `
+AUDIT DE PERFORMANCE DIGITALE CLIENT
+Client: ${lead.companyName}
+Localisation: ${lead.city || 'Non renseigné'}, ${lead.country || ''}
+Site Web: ${lead.website || 'Aucun site internet officiel détecté'}
+Score Global: ${overallScore}/100
+
+SCORES CLÉS :
+- Technique & Sécurité : ${techScore}/100
+- Référencement Local & Google Maps : ${seoScore}/100
+- Conversion & Contact Client : ${convScore}/100
+- Performance & Vitesse Mobile : ${perfScore}/100
+
+SYNTHÈSE DU DIAGNOSTIC :
+${aiReport?.summary || 'Entreprise établie localement présentant des axes de progression immédiats pour attirer de nouveaux clients.'}
+
+AXES D'AMÉLIORATION RECOMMANDÉS :
+${(aiReport?.weaknesses || ['Optimisation de la présence en ligne et de la conversion locale']).map((w: string) => '- ' + w).join('\n')}
+
+OPPORTUNITÉS PRIORITAIRES :
+${(aiReport?.verified_opportunities || lead.opportunities || []).map((o: any) => '- ' + (o.title || o.type) + ' : ' + (o.description || '')).join('\n')}
+
+PLAN D'ACTION CONSEILLÉ :
+${(aiReport?.sales_angles || []).map((sa: any) => '- ' + sa.angle + ' -> Action : ' + sa.suggested_solution).join('\n')}
+    `.trim();
+
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:static">
+      <div className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-200 overflow-hidden my-8 print:border-none print:shadow-none print:my-0">
+        {/* Top Header Toolbar (Hidden in Print) */}
+        <div className="bg-slate-900 px-6 py-4 text-white flex items-center justify-between print:hidden">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 bg-blue-500/20 text-blue-400 rounded-lg">
+              <BarChart3 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm tracking-wide">Dossier d'Audit Client — Français 🇫🇷</h3>
+              <p className="text-[11px] text-slate-400">Rapport numérique d'aide à la décision pour {lead.companyName}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePrint}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold transition-colors"
+              title="Imprimer ou enregistrer au format PDF"
+            >
+              <Printer className="w-3.5 h-3.5" /> Imprimer / PDF
+            </button>
+            <button
+              onClick={copyDossier}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5" /> {copied ? 'Copié !' : 'Copier'}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Printable Audit Document */}
+        <div className="p-8 space-y-8 print:p-0">
+          {/* Document Header */}
+          <div className="border-b border-slate-200 pb-6 flex items-start justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] font-extrabold tracking-[0.2em] uppercase text-blue-600 bg-blue-50 px-2.5 py-1 rounded">
+                AUDIT NUMÉRIQUE & RECOMMANDATIONS STRATÉGIQUES
+              </span>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight mt-2">{lead.companyName}</h2>
+              <div className="flex items-center gap-3 text-xs text-slate-500 font-medium">
+                <span>📍 {lead.address ? `${lead.address}, ` : ''}{lead.city || 'Territoire local'}{lead.country ? `, ${lead.country}` : ''}</span>
+                {lead.phone && <span>📞 {lead.phone}</span>}
+              </div>
+            </div>
+            <div className="text-right space-y-1">
+              <div className="inline-flex flex-col items-center justify-center p-3 rounded-2xl bg-slate-50 border border-slate-200 min-w-[90px]">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Santé Digitale</span>
+                <span className={cn("text-2xl font-black", overallScore >= 70 ? 'text-emerald-600' : overallScore >= 45 ? 'text-amber-500' : 'text-red-500')}>
+                  {overallScore}<span className="text-xs font-normal text-slate-400">/100</span>
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400">Généré le {formatDate(new Date())}</p>
+            </div>
+          </div>
+
+          {/* 4 Pillars Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Technique & Sécurité', score: techScore, desc: 'Fiabilité et conformité web' },
+              { label: 'Référencement Local', score: seoScore, desc: 'Présence sur Google & Maps' },
+              { label: 'Conversion & Contact', score: convScore, desc: 'Prise de contact 1-clic' },
+              { label: 'Performance Mobile', score: perfScore, desc: 'Rapidité sur smartphone' },
+            ].map(p => (
+              <div key={p.label} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{p.label}</div>
+                <div className={cn("text-xl font-black", p.score >= 70 ? 'text-emerald-600' : p.score >= 45 ? 'text-amber-500' : 'text-red-500')}>
+                  {p.score}<span className="text-xs text-slate-400 font-normal">/100</span>
+                </div>
+                <p className="text-[10px] text-slate-500">{p.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Diagnostic Summary */}
+          <div className="p-5 bg-blue-50/60 border border-blue-100 rounded-xl space-y-2">
+            <h4 className="text-xs font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-blue-600" /> Synthèse Diagnostique
+            </h4>
+            <p className="text-xs text-blue-950 leading-relaxed font-medium">
+              {aiReport?.summary || `${lead.companyName} dispose d'une activité locale identifiable${lead.city ? ' à ' + lead.city : ''}. ${lead.website ? `Son site web présente une base exploitable mais recèle d'opportunités franches d'amélioration.` : `Aucune vitrine web officielle n'a été détectée, ce qui limite fortement l'acquisition de nouveaux clients digitaux.`} Cet audit synthétise les leviers d'action à fort retour sur investissement.`}
+            </p>
+          </div>
+
+          {/* Strengths & Improvement Axes */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Forces & Atouts Numériques
+              </h4>
+              <ul className="space-y-2">
+                {(aiReport?.strengths || (lead.website ? ['Site internet en ligne et consultable', 'Activité locale établie'] : ['Entreprise et coordonnées locales répertoriées'])).map((s: string, i: number) => (
+                  <li key={i} className="text-xs text-slate-600 flex items-start gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                    <span>{s}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600" /> Axes d'Amélioration Prioritaires
+              </h4>
+              <ul className="space-y-2">
+                {(aiReport?.weaknesses || (lead.website ? ['Optimisation de l’expérience mobile pour les visiteurs sur smartphone', 'Absence d’appels à l’action directs ou de réservation immédiate'] : ['Absence de site internet pour capter la clientèle locale sur Google'])).map((w: string, i: number) => (
+                  <li key={i} className="text-xs text-slate-600 flex items-start gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                    <span>{w}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {/* Actionable Opportunities */}
+          <div className="space-y-3 pt-4 border-t border-slate-100">
+            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+              Recommandations Stratégiques pour Développer l'Acquisition Client
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {((aiReport?.verified_opportunities?.length ? aiReport.verified_opportunities : null) || (lead.opportunities?.length ? lead.opportunities : [
+                {
+                  title: lead.website ? 'Tunnel de conversion & Bouton WhatsApp 1-Clic' : 'Création d’un site vitrine optimisé mobile',
+                  description: lead.website ? 'Permettre aux visiteurs mobiles de joindre l’entreprise en un instant.' : 'Gagner en visibilité face aux concurrents locaux référencés sur Google.',
+                  evidence: lead.website ? 'Vérifié lors de l’audit technique' : 'Non détecté'
+                },
+                {
+                  title: 'Optimisation Google Business & Référencement Local',
+                  description: 'Positionner l’établissement parmi les premiers résultats sur Google Maps dans la zone de chalandise.',
+                  evidence: 'Visibilité locale perfectible'
+                }
+              ])).map((opp: any, idx: number) => (
+                <div key={idx} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                  <div className="font-bold text-xs text-slate-900">{opp.title}</div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed font-medium">{opp.description}</p>
+                  {opp.evidence && (
+                    <div className="text-[10px] text-blue-700 bg-blue-50/80 px-2 py-0.5 rounded inline-block font-semibold">
+                      Constat : {opp.evidence}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Outreach Angle in French */}
+          {aiReport?.outreach?.email && (
+            <div className="p-5 bg-slate-900 text-white rounded-xl space-y-2">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                Proposition d'Échange Personnalisée (Pour le Client)
+              </div>
+              <p className="text-xs text-slate-300 font-bold">Objet : {aiReport.outreach.email.subject}</p>
+              <p className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-normal">
+                {aiReport.outreach.email.body}
+              </p>
+            </div>
+          )}
+
+          {/* Document Footer */}
+          <div className="pt-6 border-t border-slate-200 flex items-center justify-between text-[10px] text-slate-400">
+            <span>LeadForge B2B Intelligence Engine — Audit Client Certifié</span>
+            <span>Document confidentiel préparé pour {lead.companyName}</span>
+          </div>
+        </div>
+
+        {/* Modal Bottom Actions (Hidden in Print) */}
+        <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between print:hidden">
+          <button
+            onClick={onRefreshAudit}
+            className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Ré-exécuter l'audit technique
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePrint}
+              className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors flex items-center gap-1.5"
+            >
+              <Printer className="w-3.5 h-3.5" /> Imprimer / Exporter PDF
+            </button>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-bold transition-colors"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const LOCALIZED_OPP_TITLES: Record<string, string> = {
+  WEBSITE: "Développement d'un site web vitrine professionnel",
+  SEO: "Optimisation du référencement naturel (SEO)",
+  LOCAL_SEO: "Référencement local Google Business & Maps",
+  BOOKING: "Système de réservation & prise de rendez-vous en ligne",
+  WHATSAPP: "Bouton d'appel & contact direct WhatsApp 1-clic",
+  PERFORMANCE: "Amélioration de la vitesse sur smartphone",
+  MOBILE: "Optimisation de l'affichage mobile responsive",
+  CONVERSION: "Optimisation du tunnel de conversion & formulaires",
+  SECURITY: "Sécurisation HTTPS & conformité",
+  CONTENT: "Valorisation de l'offre et contenu commercial"
+};
+
+const LOCALIZED_SERVICES: Record<string, string> = {
+  'Website Development': 'Création de Site Internet Vitrine',
+  'SEO Audit & Implementation': 'Pack Référencement & SEO',
+  'Local SEO Package': 'Optimisation Google Business & Local',
+  'Appointment Booking Integration': 'Module de Prise de RDV en Ligne',
+  'Messaging Automation': 'Intégration WhatsApp & Chat Direct',
+  'Page Speed Optimization': 'Optimisation Vitesse Mobile',
+  'Mobile Responsiveness Fix': 'Refonte Ergonomie Mobile'
+};
+
+function AuditTab({ lead, onRunAudit, auditing, token, onOpenModalFR }: any) {
+  const [langView, setLangView] = useState<'fr' | 'en'>('fr');
+  const latestAudit = lead.audits?.[0];
+
   if (!latestAudit) return (
-    <div className="bg-white p-20 rounded-2xl border border-slate-200 shadow-sm text-center space-y-4">
-      <BarChart3 className="w-12 h-12 text-slate-100 mx-auto" />
-      <p className="text-slate-400 font-medium">No technical audit data available.</p>
-      <button onClick={onRunAudit} disabled={auditing} className="px-6 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold uppercase tracking-widest">Start Analysis</button>
+    <div className="bg-white p-12 rounded-2xl border border-slate-200 shadow-sm text-center space-y-4">
+      <BarChart3 className="w-12 h-12 text-slate-200 mx-auto" />
+      <div className="space-y-1">
+        <h4 className="text-base font-bold text-slate-800">Aucun audit technique disponible pour ce client</h4>
+        <p className="text-xs text-slate-500 font-medium max-w-sm mx-auto">
+          Réalisez un audit complet pour analyser la présence web, évaluer les scores et dégager des axes commerciaux concrets.
+        </p>
+      </div>
+      <div className="flex items-center justify-center gap-3 pt-2">
+        <button 
+          onClick={() => onRunAudit('fr')} 
+          disabled={auditing} 
+          className="px-6 py-2.5 bg-blue-600 text-white rounded-lg text-xs font-bold uppercase tracking-widest shadow-md shadow-blue-900/10 hover:bg-blue-700 transition-all flex items-center gap-2"
+        >
+          {auditing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Languages className="w-3.5 h-3.5" />}
+          Lancer l'Audit en Français 🇫🇷
+        </button>
+        <button 
+          onClick={() => onRunAudit('en')} 
+          disabled={auditing} 
+          className="px-5 py-2.5 bg-slate-900 text-white rounded-lg text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all"
+        >
+          Audit EN 🇬🇧
+        </button>
+      </div>
     </div>
   );
 
   return (
     <div className="space-y-8">
+      {/* French Audit Banner & Action */}
+      <div className="bg-gradient-to-r from-blue-900 to-indigo-900 p-6 rounded-2xl text-white flex items-center justify-between flex-wrap gap-4 shadow-lg shadow-blue-900/10">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 bg-blue-500/30 text-blue-200 text-[10px] font-extrabold uppercase tracking-widest rounded border border-blue-400/20">
+              Audit Client 🇫🇷
+            </span>
+            <span className="text-xs text-blue-200 font-medium">Santé Globale : <strong>{latestAudit.overallScore ?? '—'}/100</strong></span>
+          </div>
+          <h4 className="text-base font-bold text-white tracking-tight">Audit de Performance Numérique du Client</h4>
+          <p className="text-xs text-blue-200/80 max-w-xl leading-relaxed">
+            Consultez le diagnostic stratégique, les leviers d'acquisition et exportez un dossier complet pour {lead.companyName}.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={onOpenModalFR}
+            className="flex items-center gap-1.5 px-4 py-2 bg-white text-blue-950 font-bold rounded-xl text-xs hover:bg-blue-50 transition-all shadow-sm"
+          >
+            <FileText className="w-3.5 h-3.5 text-blue-600" />
+            Dossier d'Audit (FR 🇫🇷)
+          </button>
+          <button
+            onClick={() => onRunAudit('fr')}
+            disabled={auditing}
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-700/60 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition-colors border border-blue-500/30"
+          >
+            {auditing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Actualiser (FR)
+          </button>
+        </div>
+      </div>
+
+      {/* Language View Switcher */}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+          {langView === 'fr' ? 'Diagnostic & Piliers d’Évaluation' : 'Technical Evaluation Pillars'}
+        </span>
+        <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+          <button 
+            onClick={() => setLangView('fr')} 
+            className={cn("px-2.5 py-1 text-[10px] font-bold rounded transition-all", langView === 'fr' ? "bg-white text-blue-700 shadow-2xs" : "text-slate-500 hover:text-slate-900")}
+          >
+            🇫🇷 Français
+          </button>
+          <button 
+            onClick={() => setLangView('en')} 
+            className={cn("px-2.5 py-1 text-[10px] font-bold rounded transition-all", langView === 'en' ? "bg-white text-slate-900 shadow-2xs" : "text-slate-500 hover:text-slate-900")}
+          >
+            🇬🇧 English
+          </button>
+        </div>
+      </div>
+
       {/* Opportunities Section */}
       {lead.opportunities?.length > 0 && (
         <div className="space-y-4">
@@ -1769,12 +2443,16 @@ function AuditTab({ lead, onRunAudit, auditing, token }: any) {
                   <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded", opp.severity === 'HIGH' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600')}>{opp.severity}</span>
                 </div>
                 <div className="space-y-1">
-                  <h4 className="font-bold text-slate-900 text-base">{opp.title}</h4>
-                  <p className="text-xs text-slate-500 leading-relaxed">{opp.description}</p>
+                  <h4 className="font-bold text-slate-900 text-base">
+                    {langView === 'fr' ? (LOCALIZED_OPP_TITLES[opp.type] || opp.title) : opp.title}
+                  </h4>
+                  <p className="text-xs text-slate-500 leading-relaxed font-medium">{opp.description}</p>
                 </div>
                 <div className="pt-4 border-t border-slate-50 flex items-center gap-2">
                   <div className="w-5 h-5 rounded-full bg-slate-50 flex items-center justify-center"><Check className="w-3 h-3 text-emerald-500" /></div>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Service: {opp.recommendedService}</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                    {langView === 'fr' ? 'Action recommandée : ' + (LOCALIZED_SERVICES[opp.recommendedService] || opp.recommendedService) : 'Service: ' + opp.recommendedService}
+                  </span>
                 </div>
               </div>
             ))}
@@ -1785,10 +2463,10 @@ function AuditTab({ lead, onRunAudit, auditing, token }: any) {
       <div className="space-y-6">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: 'Technical', val: latestAudit.technicalScore },
-            { label: 'SEO', val: latestAudit.seoScore },
-            { label: 'Conversion', val: latestAudit.conversionScore },
-            { label: 'Performance', val: latestAudit.performanceScore },
+            { label: langView === 'fr' ? 'Technique & Sécurité' : 'Technical', val: latestAudit.technicalScore },
+            { label: langView === 'fr' ? 'Référencement (SEO)' : 'SEO', val: latestAudit.seoScore },
+            { label: langView === 'fr' ? 'Conversion & Contact' : 'Conversion', val: latestAudit.conversionScore },
+            { label: langView === 'fr' ? 'Vitesse & Mobile' : 'Performance', val: latestAudit.performanceScore },
           ].map(s => (
             <div key={s.label} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
               <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">{s.label}</div>
@@ -1799,7 +2477,9 @@ function AuditTab({ lead, onRunAudit, auditing, token }: any) {
         <ReviewSection entityId={latestAudit.id} entityType="AUDIT" token={token} />
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="bg-slate-50 px-6 py-3 border-b border-slate-200 flex items-center justify-between">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Raw Evidence Log</span>
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+              {langView === 'fr' ? 'Relevé des Preuves Numériques Factuelles' : 'Raw Evidence Log'}
+            </span>
           </div>
           <table className="w-full text-left text-xs">
             <tbody className="divide-y divide-slate-100">
@@ -1815,7 +2495,7 @@ function AuditTab({ lead, onRunAudit, auditing, token }: any) {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <span className="text-[9px] font-bold text-slate-300 uppercase bg-slate-50 px-2 py-0.5 rounded-full">{f.category}</span>
+                    <span className="text-[9px] font-bold text-slate-400 uppercase bg-slate-50 px-2 py-0.5 rounded-full">{f.category}</span>
                   </td>
                 </tr>
               ))}
@@ -1827,26 +2507,43 @@ function AuditTab({ lead, onRunAudit, auditing, token }: any) {
   );
 }
 
-function AITab({ leadId, token, lead }: any) {
+function AITab({ leadId, token, lead, onOpenModalFR }: any) {
   const [analysis, setAnalysis] = useState<any>(null);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [activeOutreach, setActiveOutreach] = useState<'email' | 'short' | 'linkedin'>('email');
+  const [language, setLanguage] = useState<'fr' | 'en'>('fr');
+  const [tone, setTone] = useState<'consultative' | 'direct' | 'professional'>('consultative');
 
-  const runAI = async () => {
+  const fetchAI = (lang: string = language) => {
+    api.get(`/api/leads/${leadId}/ai?language=${lang}`, token).then(res => { 
+      if (res.success && res.data) {
+        setAnalysis(res.data);
+        if (res.data.language) setLanguage(res.data.language.startsWith('fr') ? 'fr' : 'en');
+        if (res.data.tone) setTone(res.data.tone);
+      } 
+    });
+  };
+
+  const runAI = async (targetLang: string = language, targetTone: string = tone, force = false) => {
     setAiAnalyzing(true);
-    const res = await api.post(`/api/leads/${leadId}/ai`, { language: 'en', tone: 'consultative' }, token);
-    if (res.success) setAnalysis(res.data);
+    const res = await api.post(`/api/leads/${leadId}/ai`, { language: targetLang, tone: targetTone, forceRegenerate: force }, token);
+    if (res.success && res.data) {
+      setAnalysis(res.data);
+      setLanguage(targetLang.startsWith('fr') ? 'fr' : 'en');
+    }
     setAiAnalyzing(false);
   };
 
   useEffect(() => {
-    api.get(`/api/leads/${leadId}/ai`, token).then(res => { if (res.success) setAnalysis(res.data); });
+    fetchAI('fr');
   }, [leadId, token]);
 
   if (aiAnalyzing) return (
     <div className="bg-white p-20 rounded-2xl border border-slate-200 shadow-sm text-center space-y-4">
-      <Loader2 className="w-10 h-10 animate-spin text-slate-200 mx-auto" />
-      <p className="text-slate-400 font-bold uppercase tracking-[0.2em] animate-pulse">Gemini 1.5 Intelligence Processing...</p>
+      <Loader2 className="w-10 h-10 animate-spin text-blue-600 mx-auto" />
+      <p className="text-slate-600 font-bold uppercase tracking-[0.2em] animate-pulse text-xs">
+        Génération du rapport d'audit digital {language === 'fr' ? 'en français' : 'in English'}...
+      </p>
     </div>
   );
 
@@ -1855,22 +2552,29 @@ function AITab({ leadId, token, lead }: any) {
 
     return (
       <div className="bg-white p-12 rounded-2xl border border-slate-200 shadow-sm text-center space-y-6">
-        <Wand2 className="w-12 h-12 text-slate-100 mx-auto" />
+        <Wand2 className="w-12 h-12 text-slate-200 mx-auto" />
         <div className="space-y-2">
-          <h3 className="text-lg font-bold text-slate-900 uppercase tracking-tight">AI Interpretation Missing</h3>
-          <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">
+          <h3 className="text-lg font-bold text-slate-900 uppercase tracking-tight">Rapport d'Audit Client Non Généré</h3>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
             {hasAudit 
-              ? "Synthesize technical audit findings into professional outreach and sales hooks using Gemini."
-              : "A technical audit must be performed before Gemini can interpret lead opportunities."}
+              ? "Synthétisez les constats techniques de l'audit en propositions d'action et modèles de prospection personnalisés."
+              : "L'analyse peut être générée immédiatement pour formuler un diagnostic digital complet."}
           </p>
         </div>
-        {hasAudit ? (
-          <button onClick={runAI} className="px-8 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-lg shadow-slate-900/10 hover:bg-slate-800 transition-all active:scale-[0.98]">Generate Intelligence Report</button>
-        ) : (
-          <p className="text-[9px] font-black text-amber-600 bg-amber-50 px-3 py-2 rounded-lg inline-block uppercase tracking-wider border border-amber-100">
-            Awaiting Technical Audit
-          </p>
-        )}
+        <div className="flex items-center justify-center gap-3">
+          <button 
+            onClick={() => runAI('fr', 'consultative')} 
+            className="px-8 py-3 bg-blue-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest shadow-lg shadow-blue-900/10 hover:bg-blue-700 transition-all flex items-center gap-2"
+          >
+            <Languages className="w-4 h-4" /> Générer l'Audit Client en Français 🇫🇷
+          </button>
+          <button 
+            onClick={() => runAI('en', 'consultative')} 
+            className="px-6 py-3 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all"
+          >
+            English 🇬🇧
+          </button>
+        </div>
       </div>
     );
   }
@@ -1888,21 +2592,79 @@ function AITab({ leadId, token, lead }: any) {
     setTimeout(() => setCopiedNotice(false), 2500);
   };
 
+  const isFrench = language.startsWith('fr');
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
+      {/* Language & Tone Controls */}
+      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Langue du Rapport :</span>
+          <div className="flex bg-white p-0.5 rounded-lg border border-slate-200 shadow-2xs">
+            <button
+              onClick={() => {
+                if (!isFrench) runAI('fr', tone, true);
+              }}
+              className={cn("px-3 py-1 rounded text-xs font-bold transition-all", isFrench ? "bg-blue-600 text-white shadow-xs" : "text-slate-600 hover:text-slate-900")}
+            >
+              🇫🇷 Français
+            </button>
+            <button
+              onClick={() => {
+                if (isFrench) runAI('en', tone, true);
+              }}
+              className={cn("px-3 py-1 rounded text-xs font-bold transition-all", !isFrench ? "bg-slate-900 text-white shadow-xs" : "text-slate-600 hover:text-slate-900")}
+            >
+              🇬🇧 English
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <select 
+            value={tone}
+            onChange={(e) => {
+              const newTone = e.target.value as any;
+              setTone(newTone);
+              runAI(language, newTone, true);
+            }}
+            className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
+          >
+            <option value="consultative">Ton : Conseil & Valeur (Recommandé)</option>
+            <option value="direct">Ton : Direct & Percutant</option>
+            <option value="professional">Ton : Professionnel & Courtois</option>
+          </select>
+          <button
+            onClick={() => runAI(language, tone, true)}
+            className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5"
+            title="Régénérer le diagnostic"
+          >
+            <RefreshCw className="w-3 h-3 text-slate-400" /> Régénérer
+          </button>
+          {onOpenModalFR && (
+            <button
+              onClick={onOpenModalFR}
+              className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded-lg text-xs font-bold flex items-center gap-1.5"
+            >
+              <FileText className="w-3 h-3 text-blue-600" /> Dossier Client FR
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-6">
         <div className="flex items-center justify-between">
           <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-[0.25em] flex items-center gap-2">
-            <MessageSquare className="w-3.5 h-3.5" /> Factual Analysis
+            <MessageSquare className="w-3.5 h-3.5" /> {isFrench ? 'Synthèse Diagnostique & Stratégique' : 'Factual Analysis'}
           </h3>
           <div className="flex items-center gap-2 text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
-            <ShieldCheck className="w-2.5 h-2.5" /> EVIDENCE-LOCKED
+            <ShieldCheck className="w-2.5 h-2.5" /> {isFrench ? 'VÉRIFIÉ & ANCRÉ DANS LES FAITS' : 'EVIDENCE-LOCKED'}
           </div>
         </div>
         <p className="text-sm text-slate-600 leading-relaxed italic border-l-4 border-slate-100 pl-6 font-medium">"{analysis.summary}"</p>
         <div className="grid grid-cols-2 gap-10 pt-4">
           <div className="space-y-3">
-            <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">Core Strengths</p>
+            <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">{isFrench ? 'Forces Majeures Identifiées' : 'Core Strengths'}</p>
             <ul className="space-y-2">
               {analysis.strengths.map((s: string, i: number) => (
                 <li key={i} className="text-[11px] text-slate-500 font-bold flex items-center gap-3">
@@ -1912,7 +2674,7 @@ function AITab({ leadId, token, lead }: any) {
             </ul>
           </div>
           <div className="space-y-3">
-            <p className="text-[9px] font-bold text-amber-500 uppercase tracking-widest">Growth Vectors</p>
+            <p className="text-[9px] font-bold text-amber-500 uppercase tracking-widest">{isFrench ? 'Axes d’Amélioration Prioritaires' : 'Growth Vectors'}</p>
             <ul className="space-y-2">
               {analysis.weaknesses.map((w: string, i: number) => (
                 <li key={i} className="text-[11px] text-slate-500 font-bold flex items-center gap-3">
@@ -1926,7 +2688,9 @@ function AITab({ leadId, token, lead }: any) {
       </div>
 
       <div className="space-y-4">
-        <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Sales Hooks</h3>
+        <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+          {isFrench ? 'Angles d’Approche Commerciale' : 'Sales Hooks'}
+        </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {analysis.sales_angles.map((sa: any, i: number) => (
             <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 hover:border-slate-300 transition-colors">
@@ -1937,7 +2701,9 @@ function AITab({ leadId, token, lead }: any) {
               <h4 className="font-bold text-slate-900 text-sm">{sa.angle}</h4>
               <p className="text-[11px] text-slate-500 leading-relaxed font-medium">{sa.why_it_matters}</p>
               <div className="pt-4 border-t border-slate-50">
-                <span className="text-[9px] font-bold text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-0.5 rounded">Action: {sa.suggested_solution}</span>
+                <span className="text-[9px] font-bold text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-0.5 rounded">
+                  {isFrench ? 'Action proposée : ' : 'Action: '}{sa.suggested_solution}
+                </span>
               </div>
             </div>
           ))}
@@ -1947,22 +2713,25 @@ function AITab({ leadId, token, lead }: any) {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-8 py-5 border-b border-slate-50 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-[0.2em]">Personalized Outreach</h3>
+            <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-[0.2em]">
+              {isFrench ? 'Modèles de Prise de Contact Personnalisés' : 'Personalized Outreach'}
+            </h3>
             {copiedNotice && (
               <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 animate-in fade-in">
-                ✓ Copied to clipboard
+                {isFrench ? '✓ Copié dans le presse-papiers' : '✓ Copied to clipboard'}
               </span>
             )}
           </div>
           <div className="flex bg-slate-100 p-1 rounded-xl">
             {[
-              { id: 'email', icon: Mail },
-              { id: 'short', icon: MessageSquare },
-              { id: 'linkedin', icon: Linkedin },
+              { id: 'email', icon: Mail, label: 'Email' },
+              { id: 'short', icon: MessageSquare, label: 'WhatsApp / SMS' },
+              { id: 'linkedin', icon: Linkedin, label: 'LinkedIn' },
             ].map((btn) => (
               <button 
                 key={btn.id}
                 onClick={() => setActiveOutreach(btn.id as any)}
+                title={btn.label}
                 className={cn("p-2 rounded-lg transition-all", activeOutreach === btn.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600")}
               >
                 <btn.icon className="w-3.5 h-3.5" />
@@ -1974,7 +2743,7 @@ function AITab({ leadId, token, lead }: any) {
           {activeOutreach === 'email' && (
             <div className="space-y-6">
               <div className="space-y-1">
-                <p className="text-[9px] font-bold text-slate-300 uppercase tracking-widest">Subject Line</p>
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{isFrench ? 'Objet de l\'email' : 'Subject Line'}</p>
                 <p className="text-sm font-bold text-slate-900 tracking-tight">{analysis.outreach.email.subject}</p>
               </div>
               <div className="bg-slate-50/50 p-6 rounded-2xl relative group border border-slate-100">

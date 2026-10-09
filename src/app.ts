@@ -108,8 +108,12 @@ export function createServerApp() {
       if (!req.user?.uid) return res.status(401).json({ success: false, error: 'Unauthorized' });
       console.log(`[DASHBOARD] Fetching stats for user UID: ${req.user.uid}`);
       const user = await getOrCreateUser(req.user.uid, req.user.email!);
-      console.log(`[DASHBOARD] Found internal user ID: ${user.id}`);
-      
+      const { scope = 'team' } = req.query;
+      const filterConditions = [isNull(leads.deletedAt)];
+      if (scope === 'personal') {
+        filterConditions.push(eq(campaigns.userId, user.id));
+      }
+
       const counts = await db.select({
         total: sql<number>`count(*)`,
         new: sql<number>`count(*) filter (where lead_status = 'NEW')`,
@@ -124,7 +128,7 @@ export function createServerApp() {
       })
       .from(leads)
       .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
-      .where(and(eq(campaigns.userId, user.id), isNull(leads.deletedAt)));
+      .where(and(...filterConditions));
 
       const oppCounts = await db.select({
         type: opportunities.type,
@@ -133,7 +137,7 @@ export function createServerApp() {
       .from(opportunities)
       .innerJoin(leads, eq(opportunities.leadId, leads.id))
       .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
-      .where(and(eq(campaigns.userId, user.id), isNull(leads.deletedAt)))
+      .where(and(...filterConditions))
       .groupBy(opportunities.type);
 
       console.log('[DASHBOARD] Stats successfully retrieved');
@@ -161,13 +165,17 @@ export function createServerApp() {
         sortBy = 'createdAt', sortOrder = 'desc',
         page = '1', limit = '50',
         search,
-        hasWebsite
+        hasWebsite,
+        scope = 'team'
       } = req.query;
 
-      const conditions = [
-        eq(campaigns.userId, user.id),
+      const conditions: any[] = [
         isNull(leads.deletedAt)
       ];
+
+      if (scope === 'personal') {
+        conditions.push(eq(campaigns.userId, user.id));
+      }
 
       if (status) conditions.push(eq(leads.leadStatus, status as any));
       if (country) conditions.push(eq(leads.country, country as string));
@@ -318,7 +326,10 @@ export function createServerApp() {
   app.get('/api/campaigns', async (req: AuthRequest, res) => {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
-      const userCampaigns = await db.select().from(campaigns).where(eq(campaigns.userId, user.id));
+      const { scope = 'team' } = req.query;
+      const userCampaigns = scope === 'personal'
+        ? await db.select().from(campaigns).where(eq(campaigns.userId, user.id))
+        : await db.select().from(campaigns);
       res.json({ success: true, data: userCampaigns });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
@@ -357,7 +368,8 @@ export function createServerApp() {
         campaignId = newCampaign.id;
       }
 
-      const job = await JobService.createJob(user.id, 'LEAD_GEN', 0);
+      const targetCount = criteria?.limit || criteria?.maxResults || 50;
+      const job = await JobService.createJob(user.id, 'LEAD_GEN', targetCount);
       
       // Run asynchronously
       JobService.runLeadGeneration(job.id, sourceId, criteria, campaignId).catch(console.error);
@@ -456,10 +468,16 @@ export function createServerApp() {
   app.get('/api/leads/export', async (req: AuthRequest, res) => {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
+      const { scope = 'team' } = req.query;
+      const whereConditions: any[] = [isNull(leads.deletedAt)];
+      if (scope === 'personal') {
+        whereConditions.push(eq(campaigns.userId, user.id));
+      }
+
       const userLeads = await db.select()
         .from(leads)
         .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
-        .where(and(eq(campaigns.userId, user.id), isNull(leads.deletedAt)));
+        .where(and(...whereConditions));
       
       const flatLeads = userLeads.map((l: any) => l.leads);
 
@@ -492,7 +510,7 @@ export function createServerApp() {
         }
       });
       
-      if (!lead || lead.campaign?.userId !== user.id) {
+      if (!lead) {
         return res.status(404).json({ success: false, error: 'Lead not found' });
       }
 
@@ -517,11 +535,13 @@ export function createServerApp() {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
       const leadId = parseInt(req.params.id);
+      const { language = 'fr', generateAi = true } = req.body;
       const lead = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
       
       if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
       
-      await CRMService.logActivity(leadId, user.id, 'AUDIT_STARTED', `Audit started for ${lead.website || 'discovered website'}`, 'USER');
+      const langLabel = language.toLowerCase().startsWith('fr') ? 'français' : 'english';
+      await CRMService.logActivity(leadId, user.id, 'AUDIT_STARTED', `Audit démarré pour ${lead.website || 'site découvert'} (langue: ${langLabel})`, 'USER');
 
       if (!lead.website) {
         await WebsiteService.discoverWebsite(leadId, lead.companyName, lead.city || '');
@@ -529,14 +549,53 @@ export function createServerApp() {
 
       const updatedLead = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
       if (!updatedLead?.website) {
-        await OpportunityService.analyzeLead(leadId);
-        return res.json({ success: true, message: 'Discovery completed, no website found.' });
+        const results = await OpportunityService.analyzeLead(leadId);
+        
+        if (generateAi) {
+          try {
+            const aiInput = {
+              auditId: null,
+              lead: { companyName: updatedLead?.companyName || lead.companyName, category: updatedLead?.category || lead.category, city: updatedLead?.city || lead.city, country: updatedLead?.country || lead.country, address: updatedLead?.address || lead.address, phone: updatedLead?.phone || lead.phone, email: updatedLead?.email || lead.email, website: null, source: updatedLead?.source || lead.source },
+              website: { status: 'not_detected', url: null, finalUrl: null },
+              audit: { overallScore: 40, technicalScore: 0, seoScore: 0, mobileScore: 0, performanceScore: 0, conversionScore: 0, localSeoScore: 0 },
+              findings: [],
+              opportunities: (results.opportunities || []).map((o: any) => ({ type: o.type, title: o.title, description: o.description, evidence: o.evidence }))
+            };
+            await AIService.generateAnalysis(leadId, aiInput, language, 'consultative');
+          } catch (e: any) {
+            console.warn('Fallback AI audit generation failed:', e.message);
+          }
+        }
+
+        return res.json({ success: true, message: 'Discovery completed, no website found.', data: results });
       }
 
       await WebsiteService.performAudit(leadId, updatedLead.website);
       const results = await OpportunityService.analyzeLead(leadId);
+
+      // Auto-generate AI analysis in requested language (French by default)
+      if (generateAi) {
+        try {
+          const latestAudit = await db.query.audits.findFirst({ where: eq(audits.leadId, leadId), orderBy: [desc(audits.createdAt)] });
+          if (latestAudit) {
+            const findings = await db.query.auditFindings.findMany({ where: eq(auditFindings.auditId, latestAudit.id) });
+            const leadOpportunities = await db.query.opportunities.findMany({ where: eq(opportunities.leadId, leadId) });
+            const aiInput = {
+              auditId: latestAudit.id,
+              lead: { companyName: updatedLead.companyName, category: updatedLead.category, city: updatedLead.city, country: updatedLead.country, address: updatedLead.address, phone: updatedLead.phone, email: updatedLead.email, website: updatedLead.website, source: updatedLead.source },
+              website: { status: updatedLead.websiteStatus, url: updatedLead.website, finalUrl: latestAudit.finalUrl },
+              audit: { overallScore: latestAudit.overallScore, technicalScore: latestAudit.technicalScore, seoScore: latestAudit.seoScore, mobileScore: latestAudit.mobileScore, performanceScore: latestAudit.performanceScore, conversionScore: latestAudit.conversionScore, localSeoScore: latestAudit.localSeoScore },
+              findings: findings.map((f: any) => ({ category: f.category, severity: f.severity, title: f.title, evidence: f.evidence })),
+              opportunities: leadOpportunities.map((o: any) => ({ type: o.type, title: o.title, description: o.description, evidence: o.evidence }))
+            };
+            await AIService.generateAnalysis(leadId, aiInput, language, 'consultative');
+          }
+        } catch (e: any) {
+          console.warn('Auto AI generation during audit failed:', e.message);
+        }
+      }
       
-      await CRMService.logActivity(leadId, user.id, 'AUDIT_COMPLETED', 'Audit and opportunity analysis completed', 'SYSTEM');
+      await CRMService.logActivity(leadId, user.id, 'AUDIT_COMPLETED', `Audit technique et analyse commerciale finalisés (${langLabel})`, 'SYSTEM');
 
       res.json({ success: true, data: results });
     } catch (error: any) {
@@ -646,63 +705,93 @@ export function createServerApp() {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
       const leadId = parseInt(req.params.id);
+      const requestedLang = (req.query.language as string) || '';
       
-      const analysis = await db.query.aiAnalyses.findFirst({
-        where: eq(aiAnalyses.leadId, leadId),
-        orderBy: [desc(aiAnalyses.createdAt)]
+      let analysis;
+      if (requestedLang) {
+        analysis = await db.query.aiAnalyses.findFirst({
+          where: and(eq(aiAnalyses.leadId, leadId), eq(aiAnalyses.language, requestedLang)),
+          orderBy: [desc(aiAnalyses.createdAt)]
+        });
+      }
+
+      if (!analysis) {
+        analysis = await db.query.aiAnalyses.findFirst({
+          where: eq(aiAnalyses.leadId, leadId),
+          orderBy: [desc(aiAnalyses.createdAt)]
+        });
+      }
+      
+      res.json({ 
+        success: true, 
+        data: analysis ? { ...(analysis.result as any), language: analysis.language, tone: analysis.tone } : null 
       });
-      
-      res.json({ success: true, data: analysis ? analysis.result : null });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
     }
   });
 
-  // Rate limiting for AI
-  const aiRateLimitMap = new Map<number, number>();
-  const AI_RATE_LIMIT_MS = 60000; // 1 minute per lead
+  // Rate limiting for AI (5s per lead to allow swift language toggling)
+  const aiRateLimitMap = new Map<string, number>();
+  const AI_RATE_LIMIT_MS = 5000;
 
   app.post('/api/leads/:id/ai', async (req: AuthRequest, res) => {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
       const leadId = parseInt(req.params.id);
+      const { language = 'fr', tone = 'consultative', forceRegenerate = false } = req.body;
 
-      // Rate limit check
-      const lastRun = aiRateLimitMap.get(leadId);
-      if (lastRun && Date.now() - lastRun < AI_RATE_LIMIT_MS) {
-        return res.status(429).json({ success: false, error: 'AI generation limited. Please wait 1 minute.' });
+      const rateLimitKey = `${leadId}_${language}`;
+      const lastRun = aiRateLimitMap.get(rateLimitKey);
+      if (!forceRegenerate && lastRun && Date.now() - lastRun < AI_RATE_LIMIT_MS) {
+        return res.status(429).json({ success: false, error: 'Veuillez patienter quelques secondes entre chaque génération.' });
       }
 
-      const { language = 'en', tone = 'professional' } = req.body;
       const leadResult = await db.select().from(leads).innerJoin(campaigns, eq(leads.campaignId, campaigns.id)).where(and(eq(leads.id, leadId), eq(campaigns.userId, user.id)));
       if (leadResult.length === 0) return res.status(404).json({ success: false, error: 'Lead not found' });
       
-      aiRateLimitMap.set(leadId, Date.now());
+      aiRateLimitMap.set(rateLimitKey, Date.now());
       const lead = leadResult[0].leads;
       const latestAudit = await db.query.audits.findFirst({ where: eq(audits.leadId, leadId), orderBy: [desc(audits.createdAt)] });
-      if (!latestAudit) return res.status(400).json({ success: false, error: 'Lead must be audited before AI analysis' });
+      
+      // Auto-run technical audit if none exists yet!
+      if (!latestAudit && lead.website) {
+        await WebsiteService.performAudit(leadId, lead.website);
+      }
+      
+      const refreshedAudit = latestAudit || await db.query.audits.findFirst({ where: eq(audits.leadId, leadId), orderBy: [desc(audits.createdAt)] });
 
-      const findings = await db.query.auditFindings.findMany({ where: eq(auditFindings.auditId, latestAudit.id) });
+      const findings = refreshedAudit 
+        ? await db.query.auditFindings.findMany({ where: eq(auditFindings.auditId, refreshedAudit.id) })
+        : [];
       const leadOpportunities = await db.query.opportunities.findMany({ where: eq(opportunities.leadId, leadId) });
 
       const aiInput = {
-        auditId: latestAudit.id,
+        auditId: refreshedAudit?.id || null,
         lead: { companyName: lead.companyName, category: lead.category, city: lead.city, country: lead.country, address: lead.address, phone: lead.phone, email: lead.email, website: lead.website, source: lead.source },
-        website: { status: lead.websiteStatus, url: lead.website, finalUrl: latestAudit.finalUrl },
-        audit: { overallScore: latestAudit.overallScore, technicalScore: latestAudit.technicalScore, seoScore: latestAudit.seoScore, mobileScore: latestAudit.mobileScore, performanceScore: latestAudit.performanceScore, conversionScore: latestAudit.conversionScore, localSeoScore: latestAudit.localSeoScore },
+        website: { status: lead.websiteStatus, url: lead.website, finalUrl: refreshedAudit?.finalUrl || lead.website },
+        audit: { 
+          overallScore: refreshedAudit?.overallScore ?? 45, 
+          technicalScore: refreshedAudit?.technicalScore ?? null, 
+          seoScore: refreshedAudit?.seoScore ?? null, 
+          mobileScore: refreshedAudit?.mobileScore ?? null, 
+          performanceScore: refreshedAudit?.performanceScore ?? null, 
+          conversionScore: refreshedAudit?.conversionScore ?? null, 
+          localSeoScore: refreshedAudit?.localSeoScore ?? null 
+        },
         findings: findings.map((f: any) => ({ category: f.category, severity: f.severity, title: f.title, evidence: f.evidence })),
         opportunities: leadOpportunities.map((o: any) => ({ type: o.type, title: o.title, description: o.description, evidence: o.evidence }))
       };
 
-
       const analysis = await AIService.generateAnalysis(leadId, aiInput, language, tone);
-      await CRMService.logActivity(leadId, user.id, 'AI_ANALYSIS_GENERATED', `AI interpretation generated (${tone}, ${language})`, 'AI');
+      await CRMService.logActivity(leadId, user.id, 'AI_ANALYSIS_GENERATED', `Rapport d'audit IA généré (${tone}, langue: ${language})`, 'AI');
 
-      res.json({ success: true, data: analysis });
+      res.json({ success: true, data: { ...analysis, language, tone } });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
     }
   });
+
 
   // CRM: Notes
   app.get('/api/leads/:id/notes', async (req: AuthRequest, res) => {

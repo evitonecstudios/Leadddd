@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { adminAuth } from '../lib/firebase-admin';
+import { adminAuth } from '../lib/firebase-admin.ts';
 import { DecodedIdToken } from 'firebase-admin/auth';
 
 export interface AuthRequest extends Request {
@@ -13,7 +13,7 @@ export const requireAuth = async (
 ) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Unauthorized: Missing token' });
+    return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
   const token = authHeader.split('Bearer ')[1];
@@ -22,19 +22,14 @@ export const requireAuth = async (
     req.user = decodedToken;
     next();
   } catch (error: any) {
-    console.error('[AUTH-MIDDLEWARE] Token verification failed:', error.message);
-    
-    // Distinguish between invalid token and service failure
-    if (error.code?.startsWith('auth/')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired token' });
+    if (error?.code === 'auth/id-token-expired') {
+      console.warn('Firebase ID token has expired. Prompting client for fresh token.');
+      return res.status(401).json({ 
+        error: 'TOKEN_EXPIRED', 
+        message: 'Firebase ID token has expired. Please refresh your token.' 
+      });
     }
-
-    // If it's a structural failure (e.g. Firebase Admin not initialized), return 500 but with JSON
-    return res.status(500).json({ 
-      success: false, 
-      error: 'Authentication service error',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('Error verifying Firebase ID token:', error);
+    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 };
-

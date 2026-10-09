@@ -92,74 +92,146 @@ export class JobService {
 
       const source = SourceRegistry.getSource(sourceId);
       let totalSaved = results.newLeadsSaved || 0;
+      let currentMasterBbox = masterBbox;
+      
+      // Fallback location bbox resolution if initial masterBbox was null
+      if (!currentMasterBbox && (criteria.city || criteria.country)) {
+        currentMasterBbox = await GridPartitionService.getBoundingBox(criteria.city || criteria.country);
+        if (currentMasterBbox) {
+          const divisions = GridPartitionService.calculateDivisions(currentMasterBbox, targetCount);
+          cells = GridPartitionService.partition(currentMasterBbox, divisions);
+          results.cellsTotal = cells.length;
+        }
+      }
 
-      // Phase 2. Controlled Cell Discovery
-      for (let cellIdx = startCellIdx; cellIdx < cells.length; cellIdx++) {
-        if (totalSaved >= targetCount) {
-          results.currentStep = `Target reached (${totalSaved}/${targetCount} leads). Finalizing...`;
-          break;
+      let expansionTier = 1;
+      const MAX_TIERS = 6; // City -> Metro -> Agglomeration -> Department -> Regional -> Wider Area
+
+      while (totalSaved < targetCount && expansionTier <= MAX_TIERS) {
+        if (expansionTier > 1 && currentMasterBbox) {
+          const tierLabel = expansionTier === 2 ? 'Metropolitan' : expansionTier === 3 ? 'Agglomeration' : expansionTier === 4 ? 'Department' : 'Regional';
+          results.currentStep = `Target not yet reached (${totalSaved}/${targetCount}). Expanding search to ${tierLabel} area...`;
+          await this.updateJobProgress(jobId, totalSaved, 'running', results);
+          
+          // Expand 2.4x each tier to capture surrounding business zones
+          currentMasterBbox = GridPartitionService.expandBoundingBox(currentMasterBbox, 2.4);
+          const divisions = GridPartitionService.calculateDivisions(currentMasterBbox, targetCount);
+          cells = GridPartitionService.partition(currentMasterBbox, divisions);
+          results.cellsTotal = cells.length;
+          results.cellsCompleted = 0;
         }
 
-        const cell = cells[cellIdx];
-        results.currentCell = `${cellIdx + 1}/${cells.length}`;
-        results.currentStep = `Searching cell ${results.currentCell} (${location || 'Region'})...`;
-        await this.updateJobProgress(jobId, totalSaved, 'running', results);
+        // Phase 2. Controlled Cell Discovery
+        for (let cellIdx = 0; cellIdx < cells.length; cellIdx++) {
+          if (totalSaved >= targetCount) break;
 
-        try {
-          const queryParams: any = { ...criteria, limit: Math.min(targetCount - totalSaved + 20, 100) };
-          if (cell) queryParams.bbox = cell;
+          const cell = cells[cellIdx];
+          results.currentCell = `${cellIdx + 1}/${cells.length} (Tier ${expansionTier})`;
+          results.currentStep = `Searching ${expansionTier === 1 ? 'City' : expansionTier === 2 ? 'Metro' : 'Regional area'} (${totalSaved}/${targetCount} leads)...`;
+          await this.updateJobProgress(jobId, totalSaved, 'running', results);
 
-          const rawLeads = await source.search(queryParams);
-          results.totalFound += rawLeads.length;
+          try {
+            // Generous cell query limit to gather ample leads per partition
+            const needed = targetCount - totalSaved;
+            const queryParams: any = { 
+              ...criteria, 
+              limit: Math.min(Math.max(needed + 50, 150), 300) 
+            };
+            if (cell) queryParams.bbox = cell;
 
-          if (rawLeads.length > 0 && (rawLeads[0] as any).rawData?.chainsExcludedCount) {
-            results.chainsFiltered = (results.chainsFiltered || 0) + (rawLeads[0] as any).rawData.chainsExcludedCount;
-          }
+            const rawLeads = await source.search(queryParams);
+            results.totalFound += rawLeads.length;
 
-          // Controlled batches of 4 for enrichment concurrency
-          const BATCH_SIZE = 4;
-          for (let b = 0; b < rawLeads.length; b += BATCH_SIZE) {
-            if (totalSaved >= targetCount) break;
-            const batch = rawLeads.slice(b, b + BATCH_SIZE);
+            if (rawLeads.length > 0 && (rawLeads[0] as any).rawData?.chainsExcludedCount) {
+              results.chainsFiltered = (results.chainsFiltered || 0) + (rawLeads[0] as any).rawData.chainsExcludedCount;
+            }
 
-            await Promise.all(batch.map(async (rawLead) => {
-              if (totalSaved >= targetCount) return;
+            // Process leads
+            for (const rawLead of rawLeads) {
+              if (totalSaved >= targetCount) break;
 
-              // Phase 3. Normalization & Deduplication
-              const { lead, status } = await LeadService.createLead(rawLead, campaignId);
+              // Phase 3. Normalization, Deduplication & Verification Check
+              const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
+                requireVerifiedContact: criteria.requireContactInfo !== false
+              });
 
-              if (status === 'created') {
+              if (status === 'created' && lead) {
                 results.validBusinesses++;
                 results.newLeadsSaved++;
                 totalSaved++;
 
-                // Phase 4. Website Discovery & Deep Contact Enrichment
-                // Phase 5. Audit & Opportunity Assessment
+                // Phase 4. Website Discovery & Contact Enrichment
                 await this.enrichLead(lead, results);
+                
+                // Update progress every 3 leads
+                if (totalSaved % 3 === 0 || totalSaved >= targetCount) {
+                  await this.updateJobProgress(jobId, totalSaved, 'running', results);
+                }
+              } else if (status === 'rejected_unverified') {
+                results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
               } else {
                 results.duplicates++;
               }
-            }));
+            }
 
+            results.cellsCompleted = cellIdx + 1;
+            await this.updateJobProgress(jobId, totalSaved, 'running', results);
+
+            // Polite pacing between cell queries
+            if (cellIdx < cells.length - 1 && totalSaved < targetCount) {
+              await new Promise(resolve => setTimeout(resolve, 400));
+            }
+          } catch (cellErr: any) {
+            await logger.error('JOB', `Discovery issue in Tier ${expansionTier}: ${cellErr.message}`, cellErr, { jobId, cellIdx });
+            results.cellsCompleted = cellIdx + 1;
             await this.updateJobProgress(jobId, totalSaved, 'running', results);
           }
+        }
 
-          results.cellsCompleted = cellIdx + 1;
-          await this.updateJobProgress(jobId, totalSaved, 'running', results);
+        if (totalSaved < targetCount && currentMasterBbox) {
+          expansionTier++;
+        } else {
+          break;
+        }
+      }
 
-          // Polite pacing between cell queries
-          if (cellIdx < cells.length - 1 && totalSaved < targetCount) {
-            await new Promise(resolve => setTimeout(resolve, 1200));
+      // Secondary Wave: If still under target, run targeted multi-query Nominatim fallback
+      if (totalSaved < targetCount && (criteria.city || criteria.country) && criteria.category) {
+        results.currentStep = `Executing complementary discovery wave to reach ${targetCount} leads...`;
+        await this.updateJobProgress(jobId, totalSaved, 'running', results);
+
+        try {
+          const needed = targetCount - totalSaved;
+          const loc = [criteria.city, criteria.country].filter(Boolean).join(' ');
+          const categoryWords = [criteria.category];
+          
+          for (const word of categoryWords) {
+            if (totalSaved >= targetCount) break;
+            const fallbackLeads = await (source as any).searchNominatim?.(word, criteria.city, criteria.country, needed + 20) || [];
+            
+            for (const rawLead of fallbackLeads) {
+              if (totalSaved >= targetCount) break;
+              const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
+                requireVerifiedContact: criteria.requireContactInfo !== false
+              });
+              if (status === 'created' && lead) {
+                results.validBusinesses++;
+                results.newLeadsSaved++;
+                totalSaved++;
+                await this.enrichLead(lead, results);
+                await this.updateJobProgress(jobId, totalSaved, 'running', results);
+              } else if (status === 'rejected_unverified') {
+                results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
+              }
+            }
           }
-        } catch (cellErr: any) {
-          await logger.error('JOB', `Cell ${cellIdx + 1} query issue: ${cellErr.message}`, cellErr, { jobId, cellIdx });
-          results.cellsCompleted = cellIdx + 1;
-          await this.updateJobProgress(jobId, totalSaved, 'running', results);
+        } catch (e: any) {
+          console.warn('Secondary discovery wave warning:', e.message);
         }
       }
 
       // Complete
-      results.currentStep = `Completed. Discovered ${results.validBusinesses} real leads.`;
+      results.currentStep = `Completed. Discovered ${results.validBusinesses} leads.`;
       results.currentCell = 'Completed';
       await this.updateJobProgress(jobId, totalSaved, 'completed', results);
       await metrics.record('JOB', 'LEAD_GEN', 'SUCCESS', Date.now() - startTime, { jobId, totalSaved });
