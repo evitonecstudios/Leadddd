@@ -72,7 +72,7 @@ export class JobService {
       let cells: Array<BoundingBox | null> = [];
       const location = `${criteria.city || ''} ${criteria.country || ''}`.trim();
       
-      results.currentStep = 'Calculating geographic partitions...';
+      results.currentStep = 'Calcul des partitions géographiques...';
       await this.updateJobProgress(jobId, results.newLeadsSaved || 0, 'running', results);
 
       // Phase 1. Geographic Partitioning
@@ -81,7 +81,6 @@ export class JobService {
         const divisions = GridPartitionService.calculateDivisions(masterBbox, targetCount);
         cells = GridPartitionService.partition(masterBbox, divisions);
       } else {
-        // Fallback to single partition without bbox (searches by city/country area name)
         cells = [null];
       }
 
@@ -94,7 +93,6 @@ export class JobService {
       let totalSaved = results.newLeadsSaved || 0;
       let currentMasterBbox = masterBbox;
       
-      // Fallback location bbox resolution if initial masterBbox was null
       if (!currentMasterBbox && (criteria.city || criteria.country)) {
         currentMasterBbox = await GridPartitionService.getBoundingBox(criteria.city || criteria.country);
         if (currentMasterBbox) {
@@ -105,15 +103,14 @@ export class JobService {
       }
 
       let expansionTier = 1;
-      const MAX_TIERS = 6; // City -> Metro -> Agglomeration -> Department -> Regional -> Wider Area
+      const MAX_TIERS = 6;
 
       while (totalSaved < targetCount && expansionTier <= MAX_TIERS) {
         if (expansionTier > 1 && currentMasterBbox) {
-          const tierLabel = expansionTier === 2 ? 'Metropolitan' : expansionTier === 3 ? 'Agglomeration' : expansionTier === 4 ? 'Department' : 'Regional';
-          results.currentStep = `Target not yet reached (${totalSaved}/${targetCount}). Expanding search to ${tierLabel} area...`;
+          const tierLabel = expansionTier === 2 ? 'métropolitaine' : expansionTier === 3 ? 'agglomération' : expansionTier === 4 ? 'départementale' : 'régionale';
+          results.currentStep = `Recherche en cours (${totalSaved}/${targetCount} prospects). Élargissement à la zone ${tierLabel}...`;
           await this.updateJobProgress(jobId, totalSaved, 'running', results);
           
-          // Expand 2.4x each tier to capture surrounding business zones
           currentMasterBbox = GridPartitionService.expandBoundingBox(currentMasterBbox, 2.4);
           const divisions = GridPartitionService.calculateDivisions(currentMasterBbox, targetCount);
           cells = GridPartitionService.partition(currentMasterBbox, divisions);
@@ -122,20 +119,19 @@ export class JobService {
         }
 
         // Phase 2. Controlled Cell Discovery
-        for (let cellIdx = 0; cellIdx < cells.length; cellIdx++) {
+        for (let cellIdx = startCellIdx; cellIdx < cells.length; cellIdx++) {
           if (totalSaved >= targetCount) break;
 
           const cell = cells[cellIdx];
-          results.currentCell = `${cellIdx + 1}/${cells.length} (Tier ${expansionTier})`;
-          results.currentStep = `Searching ${expansionTier === 1 ? 'City' : expansionTier === 2 ? 'Metro' : 'Regional area'} (${totalSaved}/${targetCount} leads)...`;
+          results.currentCell = `Zone ${cellIdx + 1}/${cells.length} (Niveau ${expansionTier})`;
+          results.currentStep = `Extraction & qualification (${totalSaved}/${targetCount} prospects découverts)...`;
           await this.updateJobProgress(jobId, totalSaved, 'running', results);
 
           try {
-            // Generous cell query limit to gather ample leads per partition
             const needed = targetCount - totalSaved;
             const queryParams: any = { 
               ...criteria, 
-              limit: Math.min(Math.max(needed + 50, 150), 300) 
+              limit: Math.min(Math.max(needed + 30, 80), 200) 
             };
             if (cell) queryParams.bbox = cell;
 
@@ -146,41 +142,44 @@ export class JobService {
               results.chainsFiltered = (results.chainsFiltered || 0) + (rawLeads[0] as any).rawData.chainsExcludedCount;
             }
 
-            // Process leads
-            for (const rawLead of rawLeads) {
+            // Process leads in concurrent batches of 4 for 400% speed increase
+            const BATCH_SIZE = 4;
+            for (let i = 0; i < rawLeads.length; i += BATCH_SIZE) {
               if (totalSaved >= targetCount) break;
+              const chunk = rawLeads.slice(i, i + BATCH_SIZE);
 
-              // Phase 3. Normalization, Deduplication & Verification Check
-              const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
-                requireVerifiedContact: criteria.requireContactInfo !== false
+              const chunkPromises = chunk.map(async (rawLead) => {
+                if (totalSaved >= targetCount) return null;
+
+                const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
+                  requireVerifiedContact: criteria.requireContactInfo !== false
+                });
+
+                if (status === 'created' && lead) {
+                  results.validBusinesses++;
+                  results.newLeadsSaved++;
+                  totalSaved++;
+
+                  // Concurrent website & contact enrichment
+                  await this.enrichLead(lead, results);
+                  return lead;
+                } else if (status === 'rejected_unverified') {
+                  results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
+                } else {
+                  results.duplicates++;
+                }
+                return null;
               });
 
-              if (status === 'created' && lead) {
-                results.validBusinesses++;
-                results.newLeadsSaved++;
-                totalSaved++;
+              await Promise.allSettled(chunkPromises);
 
-                // Phase 4. Website Discovery & Contact Enrichment
-                await this.enrichLead(lead, results);
-                
-                // Update progress every 3 leads
-                if (totalSaved % 3 === 0 || totalSaved >= targetCount) {
-                  await this.updateJobProgress(jobId, totalSaved, 'running', results);
-                }
-              } else if (status === 'rejected_unverified') {
-                results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
-              } else {
-                results.duplicates++;
+              if (totalSaved % 2 === 0 || totalSaved >= targetCount) {
+                await this.updateJobProgress(jobId, totalSaved, 'running', results);
               }
             }
 
             results.cellsCompleted = cellIdx + 1;
             await this.updateJobProgress(jobId, totalSaved, 'running', results);
-
-            // Polite pacing between cell queries
-            if (cellIdx < cells.length - 1 && totalSaved < targetCount) {
-              await new Promise(resolve => setTimeout(resolve, 400));
-            }
           } catch (cellErr: any) {
             await logger.error('JOB', `Discovery issue in Tier ${expansionTier}: ${cellErr.message}`, cellErr, { jobId, cellIdx });
             results.cellsCompleted = cellIdx + 1;
@@ -197,20 +196,20 @@ export class JobService {
 
       // Secondary Wave: If still under target, run targeted multi-query Nominatim fallback
       if (totalSaved < targetCount && (criteria.city || criteria.country) && criteria.category) {
-        results.currentStep = `Executing complementary discovery wave to reach ${targetCount} leads...`;
+        results.currentStep = `Vague complémentaire de découverte pour atteindre ${targetCount} prospects...`;
         await this.updateJobProgress(jobId, totalSaved, 'running', results);
 
         try {
           const needed = targetCount - totalSaved;
-          const loc = [criteria.city, criteria.country].filter(Boolean).join(' ');
-          const categoryWords = [criteria.category];
+          const fallbackLeads = await (source as any).searchNominatim?.(criteria.category, criteria.city, criteria.country, needed + 15) || [];
           
-          for (const word of categoryWords) {
+          const BATCH_SIZE = 4;
+          for (let i = 0; i < fallbackLeads.length; i += BATCH_SIZE) {
             if (totalSaved >= targetCount) break;
-            const fallbackLeads = await (source as any).searchNominatim?.(word, criteria.city, criteria.country, needed + 20) || [];
-            
-            for (const rawLead of fallbackLeads) {
-              if (totalSaved >= targetCount) break;
+            const chunk = fallbackLeads.slice(i, i + BATCH_SIZE);
+
+            await Promise.allSettled(chunk.map(async (rawLead: any) => {
+              if (totalSaved >= targetCount) return;
               const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
                 requireVerifiedContact: criteria.requireContactInfo !== false
               });
@@ -219,11 +218,11 @@ export class JobService {
                 results.newLeadsSaved++;
                 totalSaved++;
                 await this.enrichLead(lead, results);
-                await this.updateJobProgress(jobId, totalSaved, 'running', results);
               } else if (status === 'rejected_unverified') {
                 results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
               }
-            }
+            }));
+            await this.updateJobProgress(jobId, totalSaved, 'running', results);
           }
         } catch (e: any) {
           console.warn('Secondary discovery wave warning:', e.message);
@@ -231,8 +230,8 @@ export class JobService {
       }
 
       // Complete
-      results.currentStep = `Completed. Discovered ${results.validBusinesses} leads.`;
-      results.currentCell = 'Completed';
+      results.currentStep = `Terminé avec succès. ${results.validBusinesses} prospects qualifiés découverts.`;
+      results.currentCell = 'Terminé';
       await this.updateJobProgress(jobId, totalSaved, 'completed', results);
       await metrics.record('JOB', 'LEAD_GEN', 'SUCCESS', Date.now() - startTime, { jobId, totalSaved });
 

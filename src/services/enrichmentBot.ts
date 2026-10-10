@@ -26,8 +26,7 @@ export interface EnrichedData {
 }
 
 export class EnrichmentBot {
-  private static MAX_PAGES = 6;
-  private static USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 (compatible; LeadForge-Bot/2.0; +https://leadforge.app/)';
+  private static USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (compatible; LeadForge-Bot/2.5; +https://leadforge.app/)';
 
   static async enrich(url: string): Promise<EnrichedData> {
     const data: EnrichedData = { 
@@ -36,13 +35,7 @@ export class EnrichmentBot {
       allPhones: [],
       allEmails: []
     };
-    const visited = new Set<string>();
-    const queue: string[] = [url];
-    
-    let pagesCrawled = 0;
-    const permissiveAgent = new https.Agent({ rejectUnauthorized: false });
 
-    // Normalize base URL
     let baseUrl: URL;
     try {
       baseUrl = new URL(url);
@@ -50,75 +43,90 @@ export class EnrichmentBot {
       return data;
     }
 
-    while (queue.length > 0 && pagesCrawled < this.MAX_PAGES) {
-      const currentUrl = queue.shift()!;
-      if (visited.has(currentUrl)) continue;
-      visited.add(currentUrl);
-      pagesCrawled++;
+    const permissiveAgent = new https.Agent({ rejectUnauthorized: false });
+    const visited = new Set<string>();
 
+    const fetchPage = async (pageUrl: string) => {
       try {
-        const response = await axios.get(currentUrl, {
+        const response = await axios.get(pageUrl, {
           headers: { 
             'User-Agent': this.USER_AGENT,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8,de;q=0.7',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
             'Cache-Control': 'no-cache'
           },
           httpsAgent: permissiveAgent,
-          timeout: 10000,
-          maxRedirects: 4,
+          timeout: 3500, // Fast failover to keep speed blazing
+          maxRedirects: 3,
           validateStatus: (status) => status >= 200 && status < 400
         });
+        if (typeof response.data === 'string') {
+          return { url: pageUrl, html: response.data };
+        }
+      } catch {
+        // Page crawl non-critical failure
+      }
+      return null;
+    };
 
-        if (typeof response.data !== 'string') continue;
-        const $ = cheerio.load(response.data);
-        this.extractInfo($, currentUrl, data);
+    try {
+      // 1. Fetch Main Homepage first
+      visited.add(url);
+      const homeResult = await fetchPage(url);
+      if (!homeResult) return data;
 
-        // On initial page crawl, discover subpages (Contact, About, Legal/Impressum, Team, Services)
-        if (pagesCrawled === 1) {
-          const subpageCandidates = new Set<string>();
-          $('a').each((_, el) => {
-            const href = $(el).attr('href');
-            const linkText = $(el).text();
-            if (href && this.isLikelyContactOrInfoPage(href, linkText)) {
-              try {
-                const absoluteUrl = new URL(href, currentUrl).href;
-                const parsed = new URL(absoluteUrl);
-                // Ensure same origin or same root domain
-                if (parsed.hostname === baseUrl.hostname || parsed.hostname.endsWith('.' + baseUrl.hostname.replace(/^www\./, ''))) {
-                  // Ignore fragments and image/pdf downloads
-                  if (!parsed.hash && !/\.(pdf|jpg|jpeg|png|gif|zip|doc)$/i.test(parsed.pathname)) {
-                    subpageCandidates.add(parsed.origin + parsed.pathname);
-                  }
-                }
-              } catch {
-                // Invalid link
+      const $home = cheerio.load(homeResult.html);
+      this.extractInfo($home, url, data);
+
+      // 2. Discover high-priority subpages (Contact & Legal / Mentions Légales)
+      let contactCandidate: string | null = null;
+      let legalCandidate: string | null = null;
+
+      $home('a').each((_, el) => {
+        const href = $home(el).attr('href');
+        const linkText = $home(el).text();
+        if (href && (contactCandidate === null || legalCandidate === null)) {
+          try {
+            const absoluteUrl = new URL(href, url).href;
+            const parsed = new URL(absoluteUrl);
+            if (
+              (parsed.hostname === baseUrl.hostname || parsed.hostname.endsWith('.' + baseUrl.hostname.replace(/^www\./, ''))) &&
+              !parsed.hash &&
+              !/\.(pdf|jpg|jpeg|png|gif|zip|doc)$/i.test(parsed.pathname)
+            ) {
+              const cleanPath = (parsed.origin + parsed.pathname).toLowerCase();
+              const lower = (href + ' ' + linkText).toLowerCase();
+
+              if (!contactCandidate && (lower.includes('contact') || lower.includes('nous-contacter') || lower.includes('coordonnees'))) {
+                contactCandidate = cleanPath;
+              }
+              if (!legalCandidate && (lower.includes('mention') || lower.includes('legal') || lower.includes('impressum') || lower.includes('cgv') || lower.includes('propos'))) {
+                legalCandidate = cleanPath;
               }
             }
-          });
-
-          // Add up to 5 prioritized subpages to queue
-          const prioritized = Array.from(subpageCandidates).slice(0, 5);
-          queue.push(...prioritized);
+          } catch {}
         }
-      } catch (err: any) {
-        await logger.warn('CRAWLER', `Notice while crawling ${currentUrl}: ${err.message}`, { url }, 'WEBSITE_SCRAPER');
+      });
+
+      // 3. Fast Parallel Subpage Crawl
+      const candidates: (string | null)[] = [contactCandidate, legalCandidate];
+      const subpagesToFetch = candidates.filter((u): u is string => typeof u === 'string' && !visited.has(u));
+      subpagesToFetch.forEach(u => visited.add(u));
+
+      if (subpagesToFetch.length > 0) {
+        const results = await Promise.allSettled(subpagesToFetch.map(u => fetchPage(u)));
+        for (const res of results) {
+          if (res.status === 'fulfilled' && res.value) {
+            const $sub = cheerio.load(res.value.html);
+            this.extractInfo($sub, res.value.url, data);
+          }
+        }
       }
+    } catch (err: any) {
+      await logger.warn('CRAWLER', `Notice while enriching ${url}: ${err.message}`, { url }, 'WEBSITE_SCRAPER');
     }
 
     return data;
-  }
-
-  private static isLikelyContactOrInfoPage(href: string, text: string): boolean {
-    const lower = (href + ' ' + text).toLowerCase();
-    return lower.includes('contact') || lower.includes('contacter') || 
-           lower.includes('about') || lower.includes('propos') || 
-           lower.includes('legal') || lower.includes('imprint') || 
-           lower.includes('impressum') || lower.includes('mention') || 
-           lower.includes('kontakt') || lower.includes('nous-trouver') || 
-           lower.includes('qui-sommes-nous') || lower.includes('team') || 
-           lower.includes('equipe') || lower.includes('services') ||
-           lower.includes('info') || lower.includes('coordonnees');
   }
 
   private static extractInfo($: cheerio.CheerioAPI, url: string, data: EnrichedData) {
@@ -135,21 +143,18 @@ export class EnrichmentBot {
       }
     }
 
-    // 1. JSON-LD / Schema.org Structured Data Extraction (Highest Reliability)
+    // 1. JSON-LD / Schema.org Structured Data Extraction
     $('script[type="application/ld+json"]').each((_, el) => {
       try {
         const jsonContent = $(el).html();
         if (!jsonContent) return;
         const parsed = JSON.parse(jsonContent);
         this.extractFromJsonLd(parsed, url, data);
-      } catch {
-        // Skip malformed JSON
-      }
+      } catch {}
     });
 
     // 2. Extract Phones from tel: links
-    const telLinks = $('a[href^="tel:"]');
-    telLinks.each((_, el) => {
+    $('a[href^="tel:"]').each((_, el) => {
       const rawTel = $(el).attr('href')?.replace('tel:', '').trim();
       if (rawTel) {
         const clean = this.cleanPhoneNumber(rawTel);
@@ -163,30 +168,24 @@ export class EnrichmentBot {
       }
     });
 
-    // 3. Fallback phone regex extraction from body text
-    const textPhoneRegex = /(?:(?:\+|00)(?:[1-9]\d{0,2})[\s.-]*)?(?:\(?\d{1,4}\)?[\s.-]*)?\d{2,4}[\s.-]*\d{2,4}[\s.-]*\d{2,4}/g;
-    const phoneCandidates = bodyText.match(textPhoneRegex);
+    // 3. Fallback phone regex extraction (supports French 0X XX XX XX XX or +33 format)
+    const frenchPhoneRegex = /(?:(?:\+|00)33[\s.-]?|0)[1-9](?:[\s.-]?\d{2}){4}/g;
+    const phoneCandidates = bodyText.match(frenchPhoneRegex);
     if (phoneCandidates) {
       for (const raw of phoneCandidates) {
-        // Verify not part of a date, postal code, or SIRET
         const clean = this.cleanPhoneNumber(raw);
         if (clean && this.isValidPhoneNumber(clean)) {
-          // Avoid 14-digit SIRET or pure zeros
-          const digits = clean.replace(/\D/g, '');
-          if (digits.length >= 8 && digits.length <= 13) {
-            if (!data.phone) data.phone = clean;
-            if (!data.allPhones?.includes(clean) && (data.allPhones?.length || 0) < 3) {
-              data.allPhones?.push(clean);
-              data.evidence.push({ field: 'phone', value: clean, url, method: 'regex text', confidence: 'MEDIUM' });
-            }
+          if (!data.phone) data.phone = clean;
+          if (!data.allPhones?.includes(clean) && (data.allPhones?.length || 0) < 3) {
+            data.allPhones?.push(clean);
+            data.evidence.push({ field: 'phone', value: clean, url, method: 'regex text', confidence: 'MEDIUM' });
           }
         }
       }
     }
 
     // 4. Extract Emails from mailto: links
-    const mailtoLinks = $('a[href^="mailto:"]');
-    mailtoLinks.each((_, el) => {
+    $('a[href^="mailto:"]').each((_, el) => {
       const email = $(el).attr('href')?.replace('mailto:', '').split('?')[0].trim().toLowerCase();
       if (email && this.isValidEmail(email)) {
         if (!data.email) data.email = email;
@@ -197,8 +196,8 @@ export class EnrichmentBot {
       }
     });
 
-    // 5. Fallback email extraction with anti-obfuscation ([at], (at), &#64;)
-    let normalizedBodyText = bodyText
+    // 5. Fallback email extraction
+    const normalizedBodyText = bodyText
       .replace(/\s*\[at\]\s*/gi, '@')
       .replace(/\s*\(at\)\s*/gi, '@')
       .replace(/\s*\[dot\]\s*/gi, '.')
@@ -219,7 +218,7 @@ export class EnrichmentBot {
       }
     }
 
-    // 6. Extract WhatsApp links
+    // 6. WhatsApp links
     const waRegex = /(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?\d+)/;
     $('a[href*="wa.me"], a[href*="whatsapp.com"]').each((_, el) => {
       const href = $(el).attr('href') || '';
@@ -242,7 +241,7 @@ export class EnrichmentBot {
       }
     }
 
-    // 8. Social Media Profile Links (Comprehensive detection & normalization)
+    // 8. Social Media Profile Links
     $('a').each((_, el) => {
       const href = $(el).attr('href');
       if (!href) return;
@@ -250,8 +249,7 @@ export class EnrichmentBot {
       try {
         const lowerHref = href.toLowerCase();
         
-        // Facebook
-        if (lowerHref.includes('facebook.com/') && !lowerHref.includes('/sharer') && !lowerHref.includes('/dialog') && !lowerHref.includes('/tr?')) {
+        if (lowerHref.includes('facebook.com/') && !lowerHref.includes('/sharer') && !lowerHref.includes('/dialog')) {
           const cleanUrl = this.cleanSocialUrl(href);
           if (cleanUrl && !data.socialLinks.facebook) {
             data.socialLinks.facebook = cleanUrl;
@@ -259,7 +257,6 @@ export class EnrichmentBot {
           }
         }
 
-        // Instagram
         if (lowerHref.includes('instagram.com/') && !lowerHref.includes('/p/') && !lowerHref.includes('/explore/')) {
           const cleanUrl = this.cleanSocialUrl(href);
           if (cleanUrl && !data.socialLinks.instagram) {
@@ -268,7 +265,6 @@ export class EnrichmentBot {
           }
         }
 
-        // LinkedIn (Company or Showcase)
         if (lowerHref.includes('linkedin.com/company/') || lowerHref.includes('linkedin.com/in/')) {
           const cleanUrl = this.cleanSocialUrl(href);
           if (cleanUrl && !data.socialLinks.linkedin) {
@@ -277,67 +273,34 @@ export class EnrichmentBot {
           }
         }
 
-        // Twitter / X
-        if ((lowerHref.includes('twitter.com/') || lowerHref.includes('x.com/')) && !lowerHref.includes('/intent') && !lowerHref.includes('/share')) {
+        if ((lowerHref.includes('twitter.com/') || lowerHref.includes('x.com/')) && !lowerHref.includes('/intent')) {
           const cleanUrl = this.cleanSocialUrl(href);
           if (cleanUrl && !data.socialLinks.twitter) {
             data.socialLinks.twitter = cleanUrl;
             data.evidence.push({ field: 'twitter', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
           }
         }
-
-        // TikTok
-        if (lowerHref.includes('tiktok.com/@')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.tiktok) {
-            data.socialLinks.tiktok = cleanUrl;
-            data.evidence.push({ field: 'tiktok', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
-          }
-        }
-
-        // YouTube
-        if (lowerHref.includes('youtube.com/@') || lowerHref.includes('youtube.com/channel/') || lowerHref.includes('youtube.com/c/')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.youtube) {
-            data.socialLinks.youtube = cleanUrl;
-            data.evidence.push({ field: 'youtube', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
-          }
-        }
-
-        // Pinterest
-        if (lowerHref.includes('pinterest.com/') || lowerHref.includes('pinterest.fr/')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.pinterest) {
-            data.socialLinks.pinterest = cleanUrl;
-            data.evidence.push({ field: 'pinterest', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
-          }
-        }
-      } catch {
-        // Skip link parsing errors
-      }
+      } catch {}
     });
 
-    // 9. Legal / Registry Data Extraction (SIRET, SIREN, TVA, Manager) on Legal / Impressum pages
-    if (url.includes('mention') || url.includes('legal') || url.includes('impressum')) {
-      // SIRET (14 digits)
-      if (!data.siretOrVat) {
-        const siretMatch = bodyText.match(/(?:siret|siren|rcs|tva|ide|vat)[\s:.-]*([0-9\s]{9,18}[0-9A-Z])/i);
-        if (siretMatch && siretMatch[1]) {
-          const cleanSiret = siretMatch[1].trim();
-          data.siretOrVat = cleanSiret;
-          data.evidence.push({ field: 'legal_id', value: cleanSiret, url, method: 'legal notice text', confidence: 'HIGH' });
-        }
+    // 9. Legal & Registry Data Extraction (SIRET, SIREN, TVA, Manager)
+    if (!data.siretOrVat) {
+      // SIRET (14 digits) or SIREN (9 digits)
+      const siretMatch = bodyText.match(/(?:siret|siren|rcs|n°\s*siret)[\s:.-]*([0-9]{3}[\s\.]?[0-9]{3}[\s\.]?[0-9]{3}(?:[\s\.]?[0-9]{5})?)/i);
+      if (siretMatch && siretMatch[1]) {
+        const cleanSiret = siretMatch[1].replace(/\s+/g, ' ').trim();
+        data.siretOrVat = cleanSiret;
+        data.evidence.push({ field: 'legal_id', value: cleanSiret, url, method: 'legal notice text', confidence: 'HIGH' });
       }
+    }
 
-      // Legal Representative / Manager
-      if (!data.managerName) {
-        const managerMatch = bodyText.match(/(?:dirigeant|gérant|directeur|responsable de la publication|geschäftsführer|managing director|ceo|fondateur)[\s:.-]*([A-Z][a-zÀ-ÿ]+(?:\s+[A-Z][a-zÀ-ÿ]+){1,3})/i);
-        if (managerMatch && managerMatch[1]) {
-          const manager = managerMatch[1].trim();
-          if (manager.length > 3 && manager.length < 40) {
-            data.managerName = manager;
-            data.evidence.push({ field: 'manager', value: manager, url, method: 'legal notice text', confidence: 'HIGH' });
-          }
+    if (!data.managerName) {
+      const managerMatch = bodyText.match(/(?:dirigeant|gérant|directeur|responsable\s+de\s+la\s+publication|président)[\s:.-]*([A-ZÀ-ÖØ-ß][a-zà-öø-ÿ]+(?:\s+[A-ZÀ-ÖØ-ß][a-zà-öø-ÿ]+){1,3})/i);
+      if (managerMatch && managerMatch[1]) {
+        const manager = managerMatch[1].trim();
+        if (manager.length > 3 && manager.length < 40) {
+          data.managerName = manager;
+          data.evidence.push({ field: 'manager', value: manager, url, method: 'legal notice text', confidence: 'HIGH' });
         }
       }
     }
@@ -356,7 +319,6 @@ export class EnrichmentBot {
       return;
     }
 
-    // Telephone
     if (dataObj.telephone) {
       const tel = Array.isArray(dataObj.telephone) ? dataObj.telephone[0] : String(dataObj.telephone);
       const clean = this.cleanPhoneNumber(tel);
@@ -369,7 +331,6 @@ export class EnrichmentBot {
       }
     }
 
-    // Email
     if (dataObj.email) {
       const email = Array.isArray(dataObj.email) ? dataObj.email[0] : String(dataObj.email).trim().toLowerCase();
       if (this.isValidEmail(email)) {
@@ -381,7 +342,6 @@ export class EnrichmentBot {
       }
     }
 
-    // Address
     if (dataObj.address && !data.address) {
       const addr = dataObj.address;
       if (typeof addr === 'string') {
@@ -400,47 +360,11 @@ export class EnrichmentBot {
       }
     }
 
-    // Opening Hours
     if (dataObj.openingHours && !data.openingHours) {
       const hours = Array.isArray(dataObj.openingHours) ? dataObj.openingHours.join(', ') : String(dataObj.openingHours);
       if (hours.length > 3) {
         data.openingHours = hours;
         data.evidence.push({ field: 'opening_hours', value: hours, url, method: 'JSON-LD openingHours', confidence: 'HIGH' });
-      }
-    }
-
-    // Legal Name
-    if (dataObj.legalName && !data.legalName) {
-      data.legalName = String(dataObj.legalName).trim();
-      data.evidence.push({ field: 'legal_name', value: data.legalName, url, method: 'JSON-LD legalName', confidence: 'HIGH' });
-    }
-
-    // sameAs (Social Media Profiles declared in Schema.org)
-    if (dataObj.sameAs) {
-      const sameAsList = Array.isArray(dataObj.sameAs) ? dataObj.sameAs : [dataObj.sameAs];
-      for (const item of sameAsList) {
-        if (typeof item === 'string') {
-          const lower = item.toLowerCase();
-          if (lower.includes('facebook.com') && !data.socialLinks.facebook) {
-            data.socialLinks.facebook = item;
-            data.evidence.push({ field: 'facebook', value: item, url, method: 'Schema sameAs', confidence: 'HIGH' });
-          } else if (lower.includes('instagram.com') && !data.socialLinks.instagram) {
-            data.socialLinks.instagram = item;
-            data.evidence.push({ field: 'instagram', value: item, url, method: 'Schema sameAs', confidence: 'HIGH' });
-          } else if (lower.includes('linkedin.com') && !data.socialLinks.linkedin) {
-            data.socialLinks.linkedin = item;
-            data.evidence.push({ field: 'linkedin', value: item, url, method: 'Schema sameAs', confidence: 'HIGH' });
-          } else if ((lower.includes('twitter.com') || lower.includes('x.com')) && !data.socialLinks.twitter) {
-            data.socialLinks.twitter = item;
-            data.evidence.push({ field: 'twitter', value: item, url, method: 'Schema sameAs', confidence: 'HIGH' });
-          } else if (lower.includes('tiktok.com') && !data.socialLinks.tiktok) {
-            data.socialLinks.tiktok = item;
-            data.evidence.push({ field: 'tiktok', value: item, url, method: 'Schema sameAs', confidence: 'HIGH' });
-          } else if (lower.includes('youtube.com') && !data.socialLinks.youtube) {
-            data.socialLinks.youtube = item;
-            data.evidence.push({ field: 'youtube', value: item, url, method: 'Schema sameAs', confidence: 'HIGH' });
-          }
-        }
       }
     }
   }
@@ -452,9 +376,7 @@ export class EnrichmentBot {
   private static isValidPhoneNumber(phone: string): boolean {
     const digitsOnly = phone.replace(/\D/g, '');
     if (digitsOnly.length < 7 || digitsOnly.length > 15) return false;
-    // Exclude repeated identical numbers (e.g. 000000000)
     if (/^(\d)\1+$/.test(digitsOnly)) return false;
-    // Exclude dummy sequences
     if (digitsOnly.startsWith('12345678') || digitsOnly.startsWith('012345678')) return false;
     return true;
   }
@@ -473,7 +395,6 @@ export class EnrichmentBot {
   private static cleanSocialUrl(rawUrl: string): string {
     try {
       const u = new URL(rawUrl);
-      // Remove query parameters (e.g. ?utm_source, ?ref, ?fbclid)
       return `${u.origin}${u.pathname}`.replace(/\/$/, '');
     } catch {
       return rawUrl.split('?')[0].replace(/\/$/, '');

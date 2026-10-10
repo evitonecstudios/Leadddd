@@ -6,7 +6,8 @@ import {
   RefreshCw, Star, Info, Lightbulb, MessageSquare, Linkedin, Languages, Wand2, 
   ShieldCheck, Copy, History, Calendar, Plus, Trash2, Download, MoreVertical,
   ChevronRight, ArrowRight, User, CheckCircle2, Clock, Menu, X, PanelLeftClose, PanelLeftOpen,
-  Facebook, Instagram, Twitter, Sparkles, Share2, Printer, FileText, Briefcase, MessageCircle, PhoneCall
+  Facebook, Instagram, Twitter, Sparkles, Share2, Printer, FileText, Briefcase, MessageCircle, PhoneCall,
+  SlidersHorizontal, ArrowUpDown, RotateCcw, ChevronDown
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
 import { cn, formatDate } from './lib/utils.ts';
@@ -200,13 +201,13 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
               <AlertCircle className="w-8 h-8 text-red-600" />
             </div>
             <div className="space-y-2">
-              <h1 className="text-xl font-bold text-slate-900">Application Error</h1>
-              <p className="text-sm text-slate-500 leading-relaxed">LeadForge encountered an unexpected error during rendering.</p>
+              <h1 className="text-xl font-bold text-slate-900">Erreur de l'application</h1>
+              <p className="text-sm text-slate-500 leading-relaxed">LeadForge a rencontré une interruption inattendue lors de l'affichage.</p>
               <pre className="mt-4 p-4 bg-slate-50 rounded-lg text-left text-[10px] font-mono text-slate-600 overflow-auto max-h-40">
-                {this.state.error?.message || "Unknown error"}
+                {this.state.error?.message || "Erreur inconnue"}
               </pre>
             </div>
-            <button onClick={() => window.location.reload()} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-slate-800 transition-all">Reload Application</button>
+            <button onClick={() => window.location.reload()} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-slate-800 transition-all">Recharger l'Application</button>
           </div>
         </div>
       );
@@ -261,8 +262,8 @@ function AppContent() {
         <div className="space-y-6 animate-in fade-in duration-700">
           <div className="w-12 h-12 border-4 border-slate-100 border-t-slate-900 rounded-full animate-spin mx-auto" />
           <div className="space-y-2">
-            <h2 className="text-lg font-bold text-slate-900 tracking-tight">Loading LeadForge...</h2>
-            <p className="text-xs text-slate-400 font-medium uppercase tracking-widest">Initializing Secure Session</p>
+            <h2 className="text-lg font-bold text-slate-900 tracking-tight">Chargement de LeadForge...</h2>
+            <p className="text-xs text-slate-400 font-medium uppercase tracking-widest">Initialisation de la session sécurisée</p>
           </div>
         </div>
       </div>
@@ -279,7 +280,7 @@ function AppContent() {
               <Target className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-4xl font-bold tracking-tight text-slate-900">LeadForge</h1>
-            <p className="text-lg text-slate-600 leading-relaxed">Identity verified B2B opportunities with data-driven digital audits.</p>
+            <p className="text-base text-slate-600 leading-relaxed font-medium">Détection de prospects B2B qualifiés & vérifiés avec audits digitaux orientés conversion.</p>
           </div>
           
           {authError && (() => {
@@ -291,7 +292,7 @@ function AppContent() {
                   <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p className="text-sm font-bold text-amber-950 tracking-tight">
-                      {isUnauthorizedDomain ? 'Action Required: Authorize Domain in Firebase' : 'Sign-in failed'}
+                      {isUnauthorizedDomain ? 'Action Requise : Autoriser le domaine dans Firebase' : 'Échec de connexion'}
                     </p>
                     <p className="text-xs text-amber-800 leading-relaxed font-medium">{authError}</p>
                   </div>
@@ -301,7 +302,7 @@ function AppContent() {
                   <div className="pt-3 border-t border-amber-200/80 space-y-3">
                     <div className="bg-white p-3 rounded-xl border border-amber-200 flex items-center justify-between gap-3 shadow-xs">
                       <div className="min-w-0">
-                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Domain to Whitelist</p>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Domaine à autoriser</p>
                         <p className="text-xs font-mono font-bold text-slate-900 truncate">{currentDomain}</p>
                       </div>
                       <button
@@ -315,29 +316,29 @@ function AppContent() {
                         }}
                         className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-slate-800 transition-all shrink-0 active:scale-95"
                       >
-                        {copiedDomain ? '✓ Copied' : 'Copy Domain'}
+                        {copiedDomain ? '✓ Copié' : 'Copier le Domaine'}
                       </button>
                     </div>
 
                     <div className="text-[11px] text-slate-700 space-y-2">
-                      <p className="font-bold text-slate-900">How to fix in 30 seconds:</p>
+                      <p className="font-bold text-slate-900">Procédure en 30 secondes :</p>
                       <ol className="list-decimal list-inside space-y-1.5 text-slate-600 leading-relaxed pl-0.5">
                         <li>
-                          Open{' '}
+                          Ouvrez{' '}
                           <a 
                             href="https://console.firebase.google.com/project/majestic-safeguard-nvr20/authentication/settings" 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="text-blue-600 font-bold underline hover:text-blue-800 inline-flex items-center gap-1"
                           >
-                            Firebase Console &rarr; Authorized Domains
+                            Console Firebase &rarr; Domaines autorisés
                           </a>
                         </li>
-                        <li>Click <strong className="text-slate-900 font-bold">Add domain</strong></li>
+                        <li>Cliquez sur <strong className="text-slate-900 font-bold">Ajouter un domaine</strong></li>
                         <li>
-                          Paste <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">{currentDomain}</code> (or <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">vercel.app</code> to cover all Vercel deploys) and click <strong className="text-slate-900 font-bold">Save</strong>
+                          Collez <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">{currentDomain}</code> (ou <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">vercel.app</code> pour couvrir tous les déploiements Vercel) et cliquez sur <strong className="text-slate-900 font-bold">Enregistrer</strong>
                         </li>
-                        <li>Click the button below to sign in</li>
+                        <li>Cliquez sur le bouton ci-dessous pour vous connecter</li>
                       </ol>
                     </div>
                   </div>
@@ -347,7 +348,7 @@ function AppContent() {
           })()}
 
           <button onClick={signIn} className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98]">
-            Sign in with Google
+            Se connecter avec Google
           </button>
         </div>
       </div>
@@ -401,12 +402,12 @@ function AppContent() {
 
 function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMobile, collapsed, onToggleCollapse }: any) {
   const navItems = [
-    { id: 'dashboard', label: 'CRM Dashboard', icon: LayoutDashboard },
-    { id: 'generate', label: 'Lead Discovery', icon: Target },
-    { id: 'import', label: 'Import Leads', icon: Upload },
-    { id: 'leads', label: 'Lead Database', icon: Database },
-    { id: 'quality', label: 'Data Quality', icon: ShieldCheck },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'dashboard', label: 'Tableau de bord CRM', icon: LayoutDashboard },
+    { id: 'generate', label: 'Prospection & Découverte', icon: Target },
+    { id: 'import', label: 'Importer des prospects', icon: Upload },
+    { id: 'leads', label: 'Base de prospects', icon: Database },
+    { id: 'quality', label: 'Qualité des données', icon: ShieldCheck },
+    { id: 'settings', label: 'Paramètres & Sources', icon: Settings },
   ];
 
   const handleNavClick = (id: string) => {
@@ -421,7 +422,7 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
         <div 
           className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-40 lg:hidden transition-opacity duration-200"
           onClick={onCloseMobile}
-          aria-label="Close navigation menu"
+          aria-label="Fermer le menu"
         />
       )}
 
@@ -439,15 +440,15 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
             </div>
             <div>
               <h2 className="text-base font-bold tracking-tight text-slate-900">LeadForge</h2>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">B2B Discovery</span>
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Prospection B2B</span>
             </div>
           </div>
           {/* Prominent Close Button */}
           <button 
             onClick={onCloseMobile}
             className="p-2 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-            title="Close menu (Esc)"
-            aria-label="Close menu"
+            title="Fermer le menu (Échap)"
+            aria-label="Fermer le menu"
           >
             <X className="w-5 h-5" />
           </button>
@@ -483,7 +484,7 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
             onClick={logout} 
             className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-slate-500 uppercase tracking-wider rounded-lg hover:text-red-600 hover:bg-red-50 border border-slate-200 transition-colors"
           >
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
+            <LogOut className="w-3.5 h-3.5" /> Se déconnecter
           </button>
         </div>
       </aside>
@@ -504,14 +505,14 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
                 </div>
                 <div>
                   <h2 className="text-base font-bold tracking-tight text-slate-900">LeadForge</h2>
-                  <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">B2B Discovery</span>
+                  <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Prospection B2B</span>
                 </div>
               </div>
               <button 
                 onClick={onToggleCollapse} 
-                title="Collapse sidebar" 
+                title="Réduire le menu" 
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-                aria-label="Collapse menu"
+                aria-label="Réduire le menu"
               >
                 <PanelLeftClose className="w-4 h-4" />
               </button>
@@ -519,9 +520,9 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
           ) : (
             <button 
               onClick={onToggleCollapse} 
-              title="Expand sidebar" 
+              title="Agrandir le menu" 
               className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center"
-              aria-label="Expand menu"
+              aria-label="Agrandir le menu"
             >
               <PanelLeftOpen className="w-5 h-5" />
             </button>
@@ -560,14 +561,14 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
           </div>
           <button 
             onClick={logout} 
-            title={collapsed ? "Sign Out" : undefined}
+            title={collapsed ? "Se déconnecter" : undefined}
             className={cn(
               "w-full flex items-center text-xs font-bold text-slate-400 uppercase tracking-widest rounded-lg hover:text-red-600 hover:bg-red-50 transition-colors",
               collapsed ? "justify-center p-2.5" : "gap-3 px-3 py-2"
             )}
           >
             <LogOut className="w-3.5 h-3.5 shrink-0" />
-            {!collapsed && <span>Sign Out</span>}
+            {!collapsed && <span>Se déconnecter</span>}
           </button>
         </div>
       </aside>
@@ -577,12 +578,12 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
 
 function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: any) {
   const titles: Record<string, string> = {
-    'dashboard': 'CRM & Opportunity Funnel',
-    'generate': 'Multi-Cell Lead Discovery',
-    'import': 'CSV Lead Import',
-    'leads': 'Prospect Database & Directory',
-    'quality': 'Data Quality & Provenance',
-    'settings': 'Pipeline Configuration'
+    'dashboard': 'Tableau de bord CRM & Opportunités',
+    'generate': 'Prospection & Découverte B2B',
+    'import': 'Importation de prospects CSV',
+    'leads': 'Base de données & Répertoire prospects',
+    'quality': 'Contrôle & Qualité des données',
+    'settings': 'Configuration du Pipeline'
   };
 
   return (
@@ -592,8 +593,8 @@ function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: an
         <button 
           onClick={onOpenMobileMenu}
           className="p-2 -ml-1 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 lg:hidden flex items-center justify-center transition-colors"
-          title="Open navigation menu"
-          aria-label="Open navigation menu"
+          title="Ouvrir le menu"
+          aria-label="Ouvrir le menu"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -602,8 +603,8 @@ function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: an
         <button 
           onClick={onToggleCollapse}
           className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 hidden lg:flex items-center justify-center transition-colors"
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Agrandir le menu" : "Réduire le menu"}
+          aria-label={collapsed ? "Agrandir le menu" : "Réduire le menu"}
         >
           {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
         </button>
@@ -621,7 +622,7 @@ function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: an
           <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input 
             type="text" 
-            placeholder="Quick search..." 
+            placeholder="Recherche rapide..." 
             className="pl-9 pr-4 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-slate-900 w-48 font-medium transition-all focus:w-64" 
           />
         </div>
@@ -726,7 +727,7 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
           <AlertCircle className="w-6 h-6" />
         </div>
         <div className="space-y-1">
-          <h3 className="text-base font-bold text-slate-900 tracking-tight">Dashboard Connection Error</h3>
+          <h3 className="text-base font-bold text-slate-900 tracking-tight">Erreur de Connexion au Serveur</h3>
           <p className="text-xs text-slate-600 font-medium leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-100 font-mono text-left break-all">{error}</p>
         </div>
 
@@ -734,12 +735,12 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-left text-xs text-amber-900 space-y-2">
             <p className="font-bold flex items-center gap-1.5 text-amber-950">
               <Lightbulb className="w-4 h-4 text-amber-600" />
-              Did you add Environment Variables in Vercel?
+              Avez-vous configuré les variables d'environnement sur Vercel ?
             </p>
             <ul className="list-disc pl-4 space-y-1 text-amber-800 leading-relaxed text-[11px]">
-              <li><strong>Crucial:</strong> In Vercel, adding environment variables does <em>not</em> update existing deployments. You must go to <strong>Deployments &rarr; Three dots (...) &rarr; Redeploy</strong>.</li>
-              <li>Ensure <strong>Production, Preview, and Development</strong> are all checked when adding <code className="bg-amber-100 font-mono px-1 rounded">DATABASE_URL</code>.</li>
-              <li>For Supabase: Use the <strong>Connection Pooler</strong> URL on port <strong>6543</strong> (<code className="bg-amber-100 font-mono px-1 rounded">aws-0-*.pooler.supabase.com:6543</code>). Direct port 5432 fails on serverless due to IPv6.</li>
+              <li><strong>Indispensable :</strong> Sur Vercel, l'ajout de variables ne met <em>pas</em> à jour les déploiements existants. Rendez-vous sur <strong>Deployments &rarr; Trois points (...) &rarr; Redeploy</strong>.</li>
+              <li>Assurez-vous que <strong>Production, Preview et Development</strong> sont tous cochés lors de la saisie de <code className="bg-amber-100 font-mono px-1 rounded">DATABASE_URL</code>.</li>
+              <li>Pour Supabase : Utilisez l'URL du <strong>Connection Pooler</strong> sur le port <strong>6543</strong> (<code className="bg-amber-100 font-mono px-1 rounded">aws-0-*.pooler.supabase.com:6543</code>). Le port direct 5432 échoue en serverless à cause de l'IPv6.</li>
             </ul>
           </div>
         )}
@@ -747,21 +748,21 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
         {diagnostics && (
           <div className="p-4 bg-slate-900 text-slate-100 rounded-xl text-left text-xs font-mono space-y-2 border border-slate-800">
             <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
-              <span className="font-bold text-emerald-400 text-[11px] uppercase tracking-wider">Live Server Diagnostics</span>
+              <span className="font-bold text-emerald-400 text-[11px] uppercase tracking-wider">Diagnostic Serveur en Direct</span>
               <span className={diagnostics.connected ? "text-emerald-400" : "text-rose-400"}>
-                {diagnostics.connected ? "DB CONNECTED" : "DB DISCONNECTED"}
+                {diagnostics.connected ? "BD CONNECTÉE" : "BD DÉCONNECTÉE"}
               </span>
             </div>
             <div className="space-y-1 text-[11px] text-slate-300">
-              <p>Tables count: <span className="text-white font-bold">{diagnostics.tables ?? 0}</span> / 17</p>
+              <p>Nombre de tables : <span className="text-white font-bold">{diagnostics.tables ?? 0}</span> / 17</p>
               {diagnostics.diagnostics?.detectedHost && (
-                <p>Host: <span className="text-white">{diagnostics.diagnostics.detectedHost}:{diagnostics.diagnostics.detectedPort}</span></p>
+                <p>Hôte détecté : <span className="text-white">{diagnostics.diagnostics.detectedHost}:{diagnostics.diagnostics.detectedPort}</span></p>
               )}
               {diagnostics.diagnostics?.recommendation && (
                 <p className="text-amber-300 pt-1 font-sans">💡 {diagnostics.diagnostics.recommendation}</p>
               )}
               {diagnostics.error && (
-                <p className="text-rose-400 pt-1">Error: {diagnostics.error}</p>
+                <p className="text-rose-400 pt-1">Erreur : {diagnostics.error}</p>
               )}
             </div>
             {diagnostics.connected && diagnostics.tables < 5 && (
@@ -771,7 +772,7 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
                   disabled={isInitializing}
                   className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold font-sans transition-colors"
                 >
-                  {isInitializing ? 'Creating Tables...' : 'Initialize All 17 Database Tables Now'}
+                  {isInitializing ? 'Création des tables...' : 'Initialiser les 17 tables de la base maintenant'}
                 </button>
               </div>
             )}
@@ -787,14 +788,14 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
             onClick={() => window.location.reload()} 
             className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-colors shadow-sm"
           >
-            Retry Connection
+            Réessayer la connexion
           </button>
           <button 
             onClick={runDiagnostics} 
             disabled={isDiagnosing}
             className="px-4 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold uppercase tracking-widest transition-colors shadow-sm"
           >
-            {isDiagnosing ? 'Testing...' : 'Test Server Diagnostic'}
+            {isDiagnosing ? 'Test en cours...' : 'Tester le diagnostic serveur'}
           </button>
         </div>
       </div>
@@ -804,19 +805,19 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
   if (!stats) return <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>;
 
   const funnelStages = [
-    { label: 'New', count: stats.new, color: 'bg-slate-200' },
-    { label: 'Reviewed', count: stats.reviewed, color: 'bg-blue-200' },
-    { label: 'Qualified', count: stats.qualified, color: 'bg-indigo-300' },
-    { label: 'Contacted', count: stats.contacted, color: 'bg-amber-300' },
-    { label: 'Replied', count: stats.replied, color: 'bg-emerald-300' },
-    { label: 'Won', count: stats.won, color: 'bg-emerald-500' },
+    { label: 'Nouveau', count: stats.new, color: 'bg-slate-200' },
+    { label: 'Examiné', count: stats.reviewed, color: 'bg-blue-200' },
+    { label: 'Qualifié', count: stats.qualified, color: 'bg-indigo-300' },
+    { label: 'Contacté', count: stats.contacted, color: 'bg-amber-300' },
+    { label: 'Répondu', count: stats.replied, color: 'bg-emerald-300' },
+    { label: 'Gagné', count: stats.won, color: 'bg-emerald-500' },
   ];
 
   return (
     <div className="space-y-8">
       {/* Funnel */}
       <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-widest">Sales Funnel</h3>
+        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-widest">Entonnoir de Prospection Commerciale</h3>
         <div className="flex items-end gap-2 h-40">
           {funnelStages.map((stage) => {
             const height = stats.total > 0 ? (stage.count / stats.total) * 100 : 0;
@@ -835,9 +836,9 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
           { label: 'Total Prospects', value: stats.total },
-          { label: 'Websites Found', value: stats.websitesFound, color: 'text-emerald-600' },
-          { label: 'Websites Missing', value: stats.websitesMissing, color: 'text-amber-600' },
-          { label: 'High Opportunity', value: stats.highOpportunity, color: 'text-blue-600' },
+          { label: 'Sites Web Vérifiés', value: stats.websitesFound, color: 'text-emerald-600' },
+          { label: 'Sans Site Web (Opportunités)', value: stats.websitesMissing, color: 'text-amber-600' },
+          { label: 'Fort Potentiel Commercial', value: stats.highOpportunity, color: 'text-blue-600' },
         ].map((stat) => (
           <div key={stat.label} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">{stat.label}</p>
@@ -848,14 +849,14 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
-          <h3 className="text-lg font-bold text-slate-900">Recent Prospects</h3>
+          <h3 className="text-lg font-bold text-slate-900">Derniers Prospects Découverts</h3>
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden text-sm">
             <table className="w-full text-left">
               <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
                 <tr>
-                  <th className="px-6 py-4">Company</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4 text-right">Opp. Score</th>
+                  <th className="px-6 py-4">Entreprise</th>
+                  <th className="px-6 py-4">Statut</th>
+                  <th className="px-6 py-4 text-right">Score Opp.</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -884,14 +885,14 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
         </div>
 
         <div className="space-y-6">
-          <h3 className="text-lg font-bold text-slate-900">Opportunities</h3>
+          <h3 className="text-lg font-bold text-slate-900">Opportunités Détectées</h3>
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
             {stats.opportunities?.length > 0 ? stats.opportunities.map((opp: any) => (
               <div key={opp.type} className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">{opp.type.replace('_', ' ')}</span>
                 <span className="text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{opp.count}</span>
               </div>
-            )) : <p className="text-xs text-slate-400">No opportunities detected.</p>}
+            )) : <p className="text-xs text-slate-400">Aucune opportunité détectée pour le moment.</p>}
           </div>
         </div>
       </div>
@@ -912,23 +913,29 @@ function GenerateView({ token }: any) {
     category: 'bakery',
     maxResults: 50,
     radius: 10,
-    campaignName: 'Local Independent Shops Discovery',
+    campaignName: 'Prospection Artisans & Commerces Paris',
     localOnly: true,
     requireContactInfo: true
   });
 
   const targetPresets = [25, 50, 100, 250, 500];
   const smbCategories = [
-    { label: '🥖 Bakery / Artisan', value: 'bakery' },
-    { label: '💇 Hair & Beauty Salon', value: 'hairdresser' },
-    { label: '🍽️ Restaurant / Bistro', value: 'restaurant' },
-    { label: '🔧 Plumber / Trades', value: 'plumber' },
-    { label: '🦷 Dental / Clinic', value: 'dentist' },
-    { label: '🚗 Auto Repair & Garage', value: 'car mechanic' },
-    { label: '📱 Phone & Tech Repair', value: 'phone repair' },
-    { label: '👗 Boutique / Retail', value: 'boutique' },
-    { label: '⚖️ Lawyer / Firm', value: 'lawyer' },
-    { label: '☕ Cafe & Coffee Shop', value: 'cafe' }
+    { label: '🥖 Boulangerie / Pâtisserie', value: 'bakery' },
+    { label: '💇 Salon de Coiffure & Barbier', value: 'hairdresser' },
+    { label: '🍽️ Restaurant / Bistrot / Brasserie', value: 'restaurant' },
+    { label: '🔧 Plombier / Chauffagiste', value: 'plumber' },
+    { label: '🦷 Cabinet Dentaire', value: 'dentist' },
+    { label: '🚗 Garage Auto & Carrosserie', value: 'car mechanic' },
+    { label: '📱 Réparation Smartphone & Tech', value: 'phone repair' },
+    { label: '👗 Boutique / Prêt-à-porter', value: 'boutique' },
+    { label: '⚖️ Avocat / Cabinet Juridique', value: 'lawyer' },
+    { label: '☕ Café / Salon de Thé', value: 'cafe' },
+    { label: '⚡ Électricien', value: 'electrician' },
+    { label: '🏡 Agence Immobilière', value: 'real estate agency' },
+    { label: '🌸 Fleuriste', value: 'florist' },
+    { label: '🥩 Boucherie / Charcuterie', value: 'butcher' },
+    { label: '👓 Opticien', value: 'optician' },
+    { label: '🏋️ Salle de Sport & Fitness', value: 'gym' }
   ];
 
   useEffect(() => {
@@ -944,14 +951,14 @@ function GenerateView({ token }: any) {
             }
           }
         });
-      }, 1500);
+      }, 1200);
     }
     return () => clearInterval(interval);
   }, [jobId, token]);
 
   const handleGenerate = async () => {
     if (!criteria.campaignName) {
-      setErrorMsg('Please enter a campaign name.');
+      setErrorMsg('Veuillez renseigner un nom de campagne.');
       return;
     }
     setErrorMsg(null);
@@ -972,7 +979,7 @@ function GenerateView({ token }: any) {
     if (res.success) setJobId(res.data.id);
     else {
       setLoading(false);
-      setErrorMsg(res.error || 'Failed to start generation.');
+      setErrorMsg(res.error || 'Échec du lancement de la prospection.');
     }
   };
 
@@ -992,7 +999,7 @@ function GenerateView({ token }: any) {
       }
     }, token!);
     if (!res.success) {
-      setErrorMsg(res.error || 'Failed to resume generation');
+      setErrorMsg(res.error || 'Échec de la reprise de la génération');
     }
     setResuming(false);
   };
@@ -1009,35 +1016,35 @@ function GenerateView({ token }: any) {
           <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-8">
             <div className="flex justify-between items-start">
               <div className="space-y-1">
-                <h3 className="text-xl font-bold text-slate-900">Local SMB Lead Discovery</h3>
-                <p className="text-xs text-slate-500">Targets independent local shops & services, filtering out national corporate chains.</p>
+                <h3 className="text-xl font-bold text-slate-900">Génération & Découverte de Prospects B2B</h3>
+                <p className="text-xs text-slate-500">Cible les commerces indépendants, artisans et PME locales, en filtrant les grandes chaînes et franchises nationales.</p>
               </div>
               <div className="flex bg-slate-100 p-1 rounded-lg">
                 <button onClick={() => setSource('osm')} className={cn("px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all", !isCsv ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600")}>OpenStreetMap</button>
-                <button onClick={() => setSource('csv')} className={cn("px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all", isCsv ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600")}>CSV Import</button>
+                <button onClick={() => setSource('csv')} className={cn("px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all", isCsv ? "bg-white text-slate-900 shadow-sm" : "text-slate-400 hover:text-slate-600")}>Import CSV</button>
               </div>
             </div>
 
             {errorMsg && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-800 flex items-center justify-between">
                 <span>{errorMsg}</span>
-                <button onClick={() => setErrorMsg(null)} className="text-red-600 hover:text-red-950 font-bold text-xs">Dismiss</button>
+                <button onClick={() => setErrorMsg(null)} className="text-red-600 hover:text-red-950 font-bold text-xs">Fermer</button>
               </div>
             )}
 
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-2 col-span-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Campaign Name</label>
-                <input type="text" placeholder="e.g. Paris Bakeries Web Pitch" value={criteria.campaignName} onChange={e => setCriteria({...criteria, campaignName: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium" />
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nom de la Campagne</label>
+                <input type="text" placeholder="ex. Boulangeries Paris - Prospection Digitale" value={criteria.campaignName} onChange={e => setCriteria({...criteria, campaignName: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium" />
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Country</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pays</label>
                 <input type="text" value={criteria.country} onChange={e => setCriteria({...criteria, country: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium" />
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {[
-                    { label: '🇨🇭 Suisse / Switzerland', country: 'Switzerland', city: 'Geneva' },
                     { label: '🇫🇷 France', country: 'France', city: 'Paris' },
+                    { label: '🇨🇭 Suisse', country: 'Switzerland', city: 'Genève' },
                     { label: '🇧🇪 Belgique', country: 'Belgium', city: 'Bruxelles' },
                     { label: '🇨🇦 Canada (Québec)', country: 'Canada', city: 'Montréal' }
                   ].map(preset => (
@@ -1048,7 +1055,7 @@ function GenerateView({ token }: any) {
                         ...criteria,
                         country: preset.country,
                         city: preset.city,
-                        campaignName: `${preset.city} ${criteria.category || 'Prospection'} Lead Campaign`
+                        campaignName: `Prospection ${preset.city} - ${criteria.category || 'PME'}`
                       })}
                       className={cn(
                         "px-2 py-0.5 rounded text-[11px] font-medium transition-colors border",
@@ -1064,18 +1071,18 @@ function GenerateView({ token }: any) {
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">City / Target Region</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ville / Secteur Cible</label>
                 <input type="text" value={criteria.city} onChange={e => setCriteria({...criteria, city: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium" />
                 {criteria.country.toLowerCase().includes('switz') || criteria.country.toLowerCase().includes('suisse') ? (
                   <div className="flex flex-wrap gap-1.5 pt-1">
-                    {['Geneva', 'Lausanne', 'Zurich', 'Basel', 'Bern', 'Neuchâtel', 'Fribourg'].map(swissCity => (
+                    {['Genève', 'Lausanne', 'Zurich', 'Bâle', 'Berne', 'Neuchâtel', 'Fribourg'].map(swissCity => (
                       <button
                         key={swissCity}
                         type="button"
                         onClick={() => setCriteria({
                           ...criteria,
                           city: swissCity,
-                          campaignName: `${swissCity} ${criteria.category || 'Prospection'} Lead Campaign`
+                          campaignName: `Prospection ${swissCity} - ${criteria.category || 'PME'}`
                         })}
                         className={cn(
                           "px-2 py-0.5 rounded text-[10px] font-medium border",
@@ -1090,14 +1097,14 @@ function GenerateView({ token }: any) {
                   </div>
                 ) : (
                   <div className="flex flex-wrap gap-1.5 pt-1">
-                    {['Paris', 'Lyon', 'Marseille', 'Bordeaux', 'Lille', 'Toulouse'].map(frCity => (
+                    {['Paris', 'Lyon', 'Marseille', 'Bordeaux', 'Lille', 'Toulouse', 'Nantes', 'Nice'].map(frCity => (
                       <button
                         key={frCity}
                         type="button"
                         onClick={() => setCriteria({
                           ...criteria,
                           city: frCity,
-                          campaignName: `${frCity} ${criteria.category || 'Prospection'} Lead Campaign`
+                          campaignName: `Prospection ${frCity} - ${criteria.category || 'PME'}`
                         })}
                         className={cn(
                           "px-2 py-0.5 rounded text-[10px] font-medium border",
@@ -1115,10 +1122,10 @@ function GenerateView({ token }: any) {
 
               <div className="space-y-2 col-span-2">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Local Business Sector</label>
-                  <span className="text-[10px] text-slate-400">High-converting SMB sectors</span>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Secteur d'activité / Métier</label>
+                  <span className="text-[10px] text-slate-400">Secteurs à forte valeur ajoutée</span>
                 </div>
-                <input type="text" value={criteria.category} onChange={e => setCriteria({...criteria, category: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium placeholder:text-slate-300" placeholder="e.g. bakery, dentist, plumber, boutique" />
+                <input type="text" value={criteria.category} onChange={e => setCriteria({...criteria, category: e.target.value})} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 font-medium placeholder:text-slate-300" placeholder="ex. boulangerie, dentiste, plombier, coiffeur, garage" />
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {smbCategories.map(cat => (
                     <button
@@ -1142,12 +1149,12 @@ function GenerateView({ token }: any) {
                     <div className="flex items-center gap-2">
                       <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                       <label htmlFor="localOnlyToggle" className="text-xs font-bold text-slate-900 cursor-pointer">
-                        Target Independent Local Businesses & SMBs Only
+                        Cibler uniquement les commerces & PME indépendants
                       </label>
-                      <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded uppercase">Recommended</span>
+                      <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded uppercase">Recommandé</span>
                     </div>
                     <p className="text-[11px] text-slate-500 leading-relaxed">
-                      Actively blocks known mega-chains, corporate franchises, and multi-nationals (such as Fnac, Zara, McDonald's, Carrefour, Sephora) so you only prospect genuine local shop and business owners.
+                      Écarte automatiquement les grandes chaînes nationales, enseignes franchisées et multinationales (Fnac, Zara, McDonald's, Carrefour, Sephora, Basic-Fit...) pour cibler les vrais gérants et artisans locaux.
                     </p>
                   </div>
                   <input
@@ -1163,7 +1170,7 @@ function GenerateView({ token }: any) {
                   <div className="space-y-1">
                     <label htmlFor="requireContactToggle" className="text-xs font-bold text-slate-900 cursor-pointer flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                      🎯 Leads Vérifiés & Contactables Uniquement (Recommandé pour les commerciaux)
+                      🎯 Prospects Vérifiés & Contactables Uniquement
                     </label>
                     <p className="text-[11px] text-slate-500 leading-relaxed">
                       Exclut automatiquement les doublons, les entités sans nom d'entreprise réel, et les fiches sans contact. Conserve uniquement les prospects avec numéro de téléphone, site web ou email vérifié.
@@ -1181,8 +1188,8 @@ function GenerateView({ token }: any) {
 
               <div className="space-y-2 col-span-2">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Target Lead Volume (Ceiling)</label>
-                  <span className="text-[10px] text-slate-400 font-mono">{criteria.maxResults} leads</span>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Volume Cible de Prospects (Plafond)</label>
+                  <span className="text-[10px] text-slate-400 font-mono">{criteria.maxResults} prospects</span>
                 </div>
                 <div className="grid grid-cols-5 gap-2">
                   {targetPresets.map(preset => (
@@ -1205,7 +1212,7 @@ function GenerateView({ token }: any) {
 
             <button disabled={loading} onClick={handleGenerate} className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-800 transition-all shadow-sm active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2">
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              {loading ? 'Executing Discovery...' : `Launch Local Discovery (${criteria.maxResults} Target)`}
+              {loading ? 'Recherche & qualification en cours...' : `Lancer la prospection (${criteria.maxResults} cibles)`}
             </button>
           </div>
 
@@ -1213,10 +1220,10 @@ function GenerateView({ token }: any) {
             <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-6 animate-in fade-in slide-in-from-top-2 duration-500">
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-3">
-                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-widest">Live Pipeline Progress</h4>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-widest">Progression en Direct</h4>
                   {results.currentCell && (
                     <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono font-bold text-slate-600">
-                      Cell: {results.currentCell}
+                      Zone : {results.currentCell}
                     </span>
                   )}
                 </div>
@@ -1228,39 +1235,41 @@ function GenerateView({ token }: any) {
                       className="px-2.5 py-1 bg-amber-600 text-white text-[10px] font-bold uppercase rounded hover:bg-amber-700 flex items-center gap-1"
                     >
                       {resuming ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                      Resume
+                      Reprendre
                     </button>
                   )}
                   <span className={cn("text-[10px] font-black uppercase px-2.5 py-1 rounded", 
                     jobStatus.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 
                     jobStatus.status === 'failed' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
-                  )}>{jobStatus.status}</span>
+                  )}>
+                    {jobStatus.status === 'completed' ? 'Terminé' : jobStatus.status === 'failed' ? 'Erreur' : 'En cours'}
+                  </span>
                 </div>
               </div>
 
               {/* Pipeline Stages Tracker */}
               <div className="grid grid-cols-5 gap-2 text-center text-[9px] font-bold uppercase tracking-wider py-2">
                 <div className={cn("p-2 rounded-lg border", (results.cellsCompleted || 0) > 0 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-400 border-slate-100")}>
-                  1. Discovery
+                  1. Extraction
                 </div>
                 <div className={cn("p-2 rounded-lg border", (results.duplicates || 0) > 0 || (results.validBusinesses || 0) > 0 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-400 border-slate-100")}>
-                  2. Dedup
+                  2. Déduplication
                 </div>
                 <div className={cn("p-2 rounded-lg border", (results.verifiedWebsites || 0) > 0 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-400 border-slate-100")}>
-                  3. Web Identity
+                  3. Sites Web
                 </div>
                 <div className={cn("p-2 rounded-lg border", (results.phonesFound || 0) > 0 || (results.emailsFound || 0) > 0 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-400 border-slate-100")}>
-                  4. Deep Crawl
+                  4. Téléphone & SIREN
                 </div>
                 <div className={cn("p-2 rounded-lg border", (results.auditsCompleted || 0) > 0 ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-400 border-slate-100")}>
-                  5. Audit & Opps
+                  5. Prêt CRM
                 </div>
               </div>
 
               <div className="space-y-4">
                 <div className="flex items-center gap-3">
                   <div className={cn("w-2 h-2 rounded-full shrink-0", jobStatus.status === 'completed' ? 'bg-emerald-500' : 'bg-blue-500 animate-pulse')}></div>
-                  <p className="text-xs font-semibold text-slate-700 truncate">{results.currentStep || 'Initializing pipeline...'}</p>
+                  <p className="text-xs font-semibold text-slate-700 truncate">{results.currentStep || 'Initialisation du pipeline...'}</p>
                 </div>
 
                 <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -1268,14 +1277,14 @@ function GenerateView({ token }: any) {
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-                  <StatMini label="Raw Found" value={results.totalFound || 0} />
-                  <StatMini label="Chains Filtered" value={results.chainsFiltered || 0} color="text-rose-600 font-bold" />
-                  <StatMini label="Local SMB Leads" value={results.validBusinesses || 0} color="text-emerald-600 font-bold" />
-                  <StatMini label="Duplicates Filtered" value={results.duplicates || 0} color="text-slate-400" />
-                  <StatMini label="Web Candidates" value={results.websiteCandidates || 0} color="text-amber-600" />
-                  <StatMini label="Verified Sites" value={results.verifiedWebsites || 0} color="text-teal-600" />
-                  <StatMini label="Phones Found" value={results.phonesFound || 0} color="text-indigo-600" />
-                  <StatMini label="Emails Found" value={results.emailsFound || 0} color="text-violet-600" />
+                  <StatMini label="Bruts Détectés" value={results.totalFound || 0} />
+                  <StatMini label="Chaînes Écartées" value={results.chainsFiltered || 0} color="text-rose-600 font-bold" />
+                  <StatMini label="PME Qualifiées" value={results.validBusinesses || 0} color="text-emerald-600 font-bold" />
+                  <StatMini label="Doublons Filtrés" value={results.duplicates || 0} color="text-slate-400" />
+                  <StatMini label="Candidats Web" value={results.websiteCandidates || 0} color="text-amber-600" />
+                  <StatMini label="Sites Vérifiés" value={results.verifiedWebsites || 0} color="text-teal-600" />
+                  <StatMini label="Téléphones Trouvés" value={results.phonesFound || 0} color="text-indigo-600" />
+                  <StatMini label="Emails Découverts" value={results.emailsFound || 0} color="text-violet-600" />
                 </div>
               </div>
             </div>
@@ -1284,23 +1293,23 @@ function GenerateView({ token }: any) {
 
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pipeline Architecture</h4>
+            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Architecture du Pipeline</h4>
             <div className="space-y-3 text-xs">
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span className="text-slate-600"><strong>Geographic Partitioning:</strong> Subdivides bounding boxes into cells to avoid OSM query timeouts.</span>
+                <span className="text-slate-600"><strong>Partitionnement Géographique :</strong> Découpe automatique en zones pour éviter les timeouts cartographiques.</span>
               </div>
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span className="text-slate-600"><strong>Multi-Tag Mapping:</strong> Queries phone repair, electronics, and repair tags simultaneously.</span>
+                <span className="text-slate-600"><strong>Mapping Multi-Tags :</strong> Recherche simultanée des métiers, commerces, artisans et professions libérales.</span>
               </div>
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span className="text-slate-600"><strong>Deep Site Crawl:</strong> Scans up to 8 pages per domain for phone, mailto, and WhatsApp links.</span>
+                <span className="text-slate-600"><strong>Crawler Natif Rapide :</strong> Exploration parallèle de la page contact et des mentions légales (SIRET, gérant, téléphone, WhatsApp).</span>
               </div>
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span className="text-slate-600"><strong>Audit Trail:</strong> Stores source URL and extraction method for every single data point.</span>
+                <span className="text-slate-600"><strong>Traçabilité des Données :</strong> Sauvegarde de l'URL source et de la méthode d'extraction pour chaque coordonnée.</span>
               </div>
             </div>
           </div>
@@ -1308,10 +1317,10 @@ function GenerateView({ token }: any) {
           <div className="bg-slate-900 p-6 rounded-2xl text-white space-y-4 shadow-xl shadow-slate-900/10">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <h4 className="text-xs font-bold uppercase tracking-wider">Zero-Cost Discovery Stack</h4>
+              <h4 className="text-xs font-bold uppercase tracking-wider">Stack 100% Gratuite ($0 MVP)</h4>
             </div>
             <p className="text-[11px] opacity-80 leading-relaxed">
-              LeadForge operates 100% on $0 free infrastructure out-of-the-box (OpenStreetMap, Nominatim, Cheerio Crawler, Local Domain Probing). Optional Google or Firecrawl API keys can be connected in Settings.
+              LeadForge fonctionne nativement sans aucune clé API payante requise (OpenStreetMap, Nominatim, Crawler Cheerio ultra-rapide, Sondage de domaines locaux).
             </p>
           </div>
         </div>
@@ -1370,28 +1379,35 @@ function ImportView({ token, onBack }: any) {
     setLoading(false);
     if (res.success) {
       setStep(1);
-      setImportNotice('Import process started in background.');
+      setImportNotice('Processus d\'importation démarré en arrière-plan avec succès.');
     } else {
-      setImportNotice(res.error || 'Failed to import CSV.');
+      setImportNotice(res.error || 'Échec de l\'importation du fichier CSV.');
     }
+  };
+
+  const FIELD_LABELS_FR: Record<string, string> = {
+    companyName: 'Nom de l\'Entreprise',
+    phone: 'Numéro de Téléphone',
+    email: 'Adresse Email',
+    website: 'Site Web / URL'
   };
 
   return (
     <div className="max-w-4xl bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-8">
       <div className="flex justify-between items-center">
         <div className="space-y-1">
-          <h3 className="text-xl font-bold text-slate-900">Bulk Prospect Import</h3>
-          <p className="text-sm text-slate-500">Upload your CSV and map columns to our data architecture.</p>
+          <h3 className="text-xl font-bold text-slate-900">Importation de Prospects CSV</h3>
+          <p className="text-sm text-slate-500">Importez vos fichiers de contacts et associez les colonnes aux champs LeadForge.</p>
         </div>
         <button onClick={onBack} className="text-[10px] font-bold text-slate-400 hover:text-slate-900 flex items-center gap-2 uppercase tracking-[0.2em] transition-colors">
-          <ArrowRight className="w-3 h-3 rotate-180" /> Back to Choice
+          <ArrowRight className="w-3 h-3 rotate-180" /> Retour au choix
         </button>
       </div>
 
       {importNotice && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center justify-between">
           <span>{importNotice}</span>
-          <button onClick={() => setImportNotice(null)} className="text-emerald-700 hover:text-emerald-950 font-bold text-xs">Dismiss</button>
+          <button onClick={() => setImportNotice(null)} className="text-emerald-700 hover:text-emerald-950 font-bold text-xs">Fermer</button>
         </div>
       )}
 
@@ -1399,8 +1415,8 @@ function ImportView({ token, onBack }: any) {
         <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-slate-200 rounded-2xl p-16 text-center space-y-4 hover:border-slate-400 cursor-pointer transition-colors group">
           <Upload className="w-12 h-12 text-slate-200 mx-auto group-hover:text-slate-400 transition-colors" />
           <div className="space-y-1">
-            <p className="text-sm font-bold text-slate-900 uppercase tracking-widest">Select CSV File</p>
-            <p className="text-[11px] text-slate-400 font-medium">Standard UTF-8 CSV recommended</p>
+            <p className="text-sm font-bold text-slate-900 uppercase tracking-widest">Sélectionner un Fichier CSV</p>
+            <p className="text-[11px] text-slate-400 font-medium">Format standard CSV UTF-8 recommandé</p>
           </div>
           <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileUpload} />
         </div>
@@ -1409,28 +1425,30 @@ function ImportView({ token, onBack }: any) {
         <div className="space-y-8">
           <div className="grid grid-cols-2 gap-12">
             <div className="space-y-6">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em]">Column Mapping</h4>
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em]">Correspondance des Colonnes</h4>
               {Object.keys(mapping).map((field) => (
                 <div key={field} className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{field.replace(/([A-Z])/g, ' $1')}</label>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    {FIELD_LABELS_FR[field] || field.replace(/([A-Z])/g, ' $1')}
+                  </label>
                   <select value={mapping[field]} onChange={e => setMapping({...mapping, [field]: e.target.value})} className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:outline-none focus:ring-1 focus:ring-slate-900">
-                    <option value="">(Skip Field)</option>
+                    <option value="">(Ignorer ce champ)</option>
                     {headers.map(h => <option key={h} value={h}>{h}</option>)}
                   </select>
                 </div>
               ))}
             </div>
             <div className="space-y-6">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em]">Raw Data Preview</h4>
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em]">Aperçu des Données Brutes</h4>
               <div className="bg-slate-50 rounded-xl p-4 space-y-3 overflow-auto max-h-[400px]">
                 {data.slice(0, 3).map((row, i) => <div key={i} className="text-[9px] font-mono text-slate-500 bg-white p-3 rounded border border-slate-100"><pre>{JSON.stringify(row, null, 2)}</pre></div>)}
               </div>
             </div>
           </div>
           <div className="flex gap-4 pt-4">
-            <button onClick={() => setStep(1)} className="flex-1 py-3 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-50 transition-colors">Back</button>
+            <button onClick={() => setStep(1)} className="flex-1 py-3 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-50 transition-colors">Précédent</button>
             <button onClick={handleImport} disabled={loading} className="flex-1 py-3 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-colors flex items-center justify-center gap-2">
-              {loading && <Loader2 className="w-4 h-4 animate-spin" />} {loading ? 'Importing...' : 'Confirm Import'}
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />} {loading ? 'Importation en cours...' : 'Confirmer l\'Importation'}
             </button>
           </div>
         </div>
@@ -1441,28 +1459,117 @@ function ImportView({ token, onBack }: any) {
 
 function LeadsView({ token, onSelectLead }: any) {
   const [leads, setLeads] = useState<any[]>([]);
+  const [totalLeads, setTotalLeads] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [loading, setLoading] = useState(false);
+
+  // Filter States
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [cityFilter, setCityFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [contactFilter, setContactFilter] = useState('all');
+  const [websiteFilter, setWebsiteFilter] = useState('all');
+  const [oppScoreFilter, setOppScoreFilter] = useState('all');
+  const [auditFilter, setAuditFilter] = useState('all');
   const [scopeFilter, setScopeFilter] = useState<'team' | 'personal'>('team');
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+
+  // UI States
+  const [showFiltersDrawer, setShowFiltersDrawer] = useState(false);
   const [selectedLeads, setSelectedLeads] = useState<number[]>([]);
   const [commercialLead, setCommercialLead] = useState<any | null>(null);
+  const [auditMessage, setAuditMessage] = useState<string | null>(null);
+  const [rowAuditing, setRowAuditing] = useState<number | null>(null);
+  const [filterOptions, setFilterOptions] = useState<{
+    cities: { city: string; count: number }[];
+    categories: { category: string; count: number }[];
+    statusCounts: { status: string; count: number }[];
+    summary: any;
+  }>({
+    cities: [],
+    categories: [],
+    statusCounts: [],
+    summary: {}
+  });
+
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Load dynamic filter options on mount
+  useEffect(() => {
+    if (token) {
+      api.get('/api/leads/filter-options', token).then(res => {
+        if (res.success && res.data) {
+          setFilterOptions(res.data);
+        }
+      });
+    }
+  }, [token]);
+
+  // Build query string
+  const getQueryParams = (forExport = false) => {
+    const params = new URLSearchParams();
+    if (debouncedSearch) params.append('search', debouncedSearch);
+    if (statusFilter) params.append('status', statusFilter);
+    if (cityFilter) params.append('city', cityFilter);
+    if (categoryFilter) params.append('category', categoryFilter);
+    if (contactFilter && contactFilter !== 'all') params.append('contactFilter', contactFilter);
+    if (websiteFilter && websiteFilter !== 'all') params.append('websiteFilter', websiteFilter);
+    if (oppScoreFilter && oppScoreFilter !== 'all') params.append('oppScoreRange', oppScoreFilter);
+    if (auditFilter && auditFilter !== 'all') params.append('auditFilter', auditFilter);
+    params.append('scope', scopeFilter);
+    params.append('sortBy', sortBy);
+    params.append('sortOrder', sortOrder);
+    if (!forExport) {
+      params.append('page', String(page));
+      params.append('limit', String(pageSize));
+    }
+    return params;
+  };
 
   const fetchLeads = async () => {
     setLoading(true);
-    const params = new URLSearchParams();
-    if (search) params.append('search', search);
-    if (statusFilter) params.append('status', statusFilter);
-    params.append('scope', scopeFilter);
+    const params = getQueryParams();
     const res = await api.get(`/api/leads?${params.toString()}`, token);
-    if (res.success) setLeads(res.data);
+    if (res.success) {
+      setLeads(res.data || []);
+      setTotalLeads(res.total ?? (res.data || []).length);
+      setTotalPages(res.totalPages ?? 1);
+    }
     setLoading(false);
   };
 
-  useEffect(() => { if (token) fetchLeads(); }, [token, statusFilter, scopeFilter]);
-
-  const [auditMessage, setAuditMessage] = useState<string | null>(null);
-  const [rowAuditing, setRowAuditing] = useState<number | null>(null);
+  useEffect(() => {
+    if (token) {
+      fetchLeads();
+    }
+  }, [
+    token,
+    debouncedSearch,
+    statusFilter,
+    cityFilter,
+    categoryFilter,
+    contactFilter,
+    websiteFilter,
+    oppScoreFilter,
+    auditFilter,
+    scopeFilter,
+    sortBy,
+    sortOrder,
+    page,
+    pageSize
+  ]);
 
   const runSingleAuditFR = async (id: number) => {
     setRowAuditing(id);
@@ -1472,8 +1579,9 @@ function LeadsView({ token, onSelectLead }: any) {
   };
 
   const handleExport = () => {
+    const params = getQueryParams(true);
     const a = document.createElement('a');
-    a.href = `/api/leads/export?token=${token}`;
+    a.href = `/api/leads/export?token=${token}&${params.toString()}`;
     a.download = `leadforge-prospects-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
@@ -1490,245 +1598,700 @@ function LeadsView({ token, onSelectLead }: any) {
     else setSelectedLeads([...selectedLeads, id]);
   };
 
+  const resetAllFilters = () => {
+    setSearch('');
+    setDebouncedSearch('');
+    setStatusFilter('');
+    setCityFilter('');
+    setCategoryFilter('');
+    setContactFilter('all');
+    setWebsiteFilter('all');
+    setOppScoreFilter('all');
+    setAuditFilter('all');
+    setSortBy('createdAt');
+    setSortOrder('desc');
+    setPage(1);
+  };
+
+  const hasActiveFilters = Boolean(
+    debouncedSearch ||
+    statusFilter ||
+    cityFilter ||
+    categoryFilter ||
+    contactFilter !== 'all' ||
+    websiteFilter !== 'all' ||
+    oppScoreFilter !== 'all' ||
+    auditFilter !== 'all' ||
+    sortBy !== 'createdAt' ||
+    sortOrder !== 'desc'
+  );
+
+  const summary = filterOptions.summary || {};
+
   return (
     <div className="space-y-6">
       {auditMessage && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center justify-between">
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center justify-between animate-in fade-in">
           <span>{auditMessage}</span>
-          <button onClick={() => setAuditMessage(null)} className="text-emerald-600 hover:text-emerald-950 font-bold text-xs">Dismiss</button>
+          <button onClick={() => setAuditMessage(null)} className="text-emerald-600 hover:text-emerald-950 font-bold text-xs">Fermer</button>
         </div>
       )}
-      <div className="flex justify-between items-end flex-wrap gap-4">
-        <div className="space-y-4">
-          <h3 className="text-xl font-bold text-slate-900">Prospect Database</h3>
-          <div className="flex gap-3 flex-wrap">
-            <div className="relative">
-              <Search className="w-3 h-3 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input 
-                type="text" 
-                placeholder="Search..." 
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && fetchLeads()}
-                className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-slate-100 w-64" 
-              />
-            </div>
-            <select 
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold uppercase tracking-wider text-slate-500 outline-none"
-            >
-              <option value="">All Statuses</option>
-              {['NEW', 'REVIEWED', 'QUALIFIED', 'CONTACTED', 'REPLIED', 'WON', 'LOST', 'DISMISSED'].map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
 
-            <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setScopeFilter('team')}
-                className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1 text-[11px]",
-                  scopeFilter === 'team' ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
-                )}
-                title="Afficher tous les prospects générés par l'équipe"
-              >
-                👥 Équipe (Partagée)
-              </button>
-              <button
-                type="button"
-                onClick={() => setScopeFilter('personal')}
-                className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1 text-[11px]",
-                  scopeFilter === 'personal' ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
-                )}
-                title="Afficher uniquement mes prospects personnels"
-              >
-                👤 Mes Leads
-              </button>
-            </div>
+      {/* Header & Quick Action Buttons */}
+      <div className="flex justify-between items-start flex-wrap gap-4">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h3 className="text-xl font-bold text-slate-900">Base de Données des Prospects</h3>
+            <span className="px-2.5 py-0.5 bg-slate-900 text-white rounded-full text-[11px] font-bold">
+              {totalLeads} {totalLeads > 1 ? 'prospects' : 'prospect'}
+            </span>
           </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Filtrez avec souplesse par entreprise, ville, statut, canal de contact ou opportunité commerciale.
+          </p>
         </div>
+
         <div className="flex gap-2 items-center flex-wrap">
           {selectedLeads.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <button 
-                onClick={async () => {
-                  setAuditMessage(`Réalisation des audits en français pour ${selectedLeads.length} prospects...`);
-                  for (const id of selectedLeads) {
-                    await api.post(`/api/leads/${id}/audit`, { language: 'fr' }, token);
-                  }
-                  setAuditMessage(`Audits en français terminés pour ${selectedLeads.length} prospects.`);
-                  fetchLeads();
-                  setSelectedLeads([]);
-                }}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-blue-700 transition-colors shadow-lg shadow-blue-900/10"
-              >
-                <Languages className="w-3.5 h-3.5" /> Auditer en Français 🇫🇷 ({selectedLeads.length})
-              </button>
-              <button 
-                onClick={async () => {
-                  setAuditMessage(`Running standard audits for ${selectedLeads.length} leads in background...`);
-                  for (const id of selectedLeads) {
-                    await api.post(`/api/leads/${id}/audit`, { language: 'en' }, token);
-                  }
-                  setAuditMessage(`Audited ${selectedLeads.length} selected leads.`);
-                  fetchLeads();
-                  setSelectedLeads([]);
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-slate-900 transition-colors shadow-sm"
-              >
-                Audit EN ({selectedLeads.length})
-              </button>
-            </div>
+            <button 
+              onClick={async () => {
+                setAuditMessage(`Réalisation des audits en français pour ${selectedLeads.length} prospects...`);
+                for (const id of selectedLeads) {
+                  await api.post(`/api/leads/${id}/audit`, { language: 'fr' }, token);
+                }
+                setAuditMessage(`Audits en français terminés pour ${selectedLeads.length} prospects.`);
+                fetchLeads();
+                setSelectedLeads([]);
+              }}
+              className="flex items-center gap-2 px-3.5 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-blue-700 transition-colors shadow-md shadow-blue-900/10"
+            >
+              <Languages className="w-3.5 h-3.5" /> Auditer FR ({selectedLeads.length})
+            </button>
           )}
-          <button onClick={handleExport} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-slate-50 transition-colors shadow-sm">
-            <Download className="w-3.5 h-3.5" /> Export CSV
+
+          <button 
+            onClick={() => setShowFiltersDrawer(!showFiltersDrawer)}
+            className={cn(
+              "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border",
+              showFiltersDrawer || hasActiveFilters
+                ? "bg-blue-50 text-blue-700 border-blue-200 shadow-xs"
+                : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+            )}
+            title="Afficher tous les filtres avancés (Ville, métier, présence web, scores...)"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            Filtres Avancés
+            {hasActiveFilters && (
+              <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+            )}
+          </button>
+
+          <button 
+            onClick={handleExport} 
+            className="flex items-center gap-2 px-3.5 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-slate-50 transition-colors shadow-xs"
+            title="Télécharger les prospects filtrés au format CSV"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-500" /> Exporter CSV
           </button>
         </div>
       </div>
 
+      {/* 1-Click Interactive Quick Filter Pills */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+        <button
+          onClick={() => { resetAllFilters(); }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            !hasActiveFilters
+              ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+          )}
+        >
+          <span>🎯 Tous</span>
+          <span className="text-[10px] opacity-70">({summary.total ?? totalLeads})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setWebsiteFilter(websiteFilter === 'no_website' ? 'all' : 'no_website');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            websiteFilter === 'no_website'
+              ? "bg-amber-600 text-white border-amber-600 shadow-xs"
+              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+          )}
+          title="Filtrer les entreprises qui n'ont aucun site internet"
+        >
+          <span>🚀 Sans Site Web</span>
+          <span className="text-[10px] opacity-80 font-mono">({summary.noWebsite ?? 0})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setContactFilter(contactFilter === 'has_phone' ? 'all' : 'has_phone');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            contactFilter === 'has_phone'
+              ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+          )}
+        >
+          <span>📞 Avec Téléphone</span>
+          <span className="text-[10px] opacity-80 font-mono">({summary.withPhone ?? 0})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setContactFilter(contactFilter === 'has_email' ? 'all' : 'has_email');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            contactFilter === 'has_email'
+              ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+          )}
+        >
+          <span>✉️ Avec Email</span>
+          <span className="text-[10px] opacity-80 font-mono">({summary.withEmail ?? 0})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setOppScoreFilter(oppScoreFilter === 'high' ? 'all' : 'high');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            oppScoreFilter === 'high'
+              ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+          )}
+        >
+          <span>🔥 Fort Potentiel (≥60)</span>
+          <span className="text-[10px] opacity-80 font-mono">({summary.highOpportunity ?? 0})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setStatusFilter(statusFilter === 'QUALIFIED' ? '' : 'QUALIFIED');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            statusFilter === 'QUALIFIED'
+              ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+          )}
+        >
+          <span>✨ Qualifiés</span>
+        </button>
+      </div>
+
+      {/* Main Filter Control Bar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div className="flex gap-3 flex-wrap items-center">
+          {/* Live Search Input with Instant Clear */}
+          <div className="relative flex-1 min-w-[260px]">
+            <Search className="w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input 
+              type="text" 
+              placeholder="Rechercher par nom, ville, tél, email, métier, adresse..." 
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-10 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white w-full transition-all" 
+            />
+            {search && (
+              <button 
+                onClick={() => setSearch('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                title="Effacer la recherche"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* CRM Status Dropdown */}
+          <div className="min-w-[160px]">
+            <select 
+              value={statusFilter}
+              onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider text-slate-700 outline-none focus:bg-white"
+            >
+              <option value="">Tous les statuts</option>
+              <option value="NEW">Nouveaux</option>
+              <option value="REVIEWED">Examinés</option>
+              <option value="QUALIFIED">Qualifiés</option>
+              <option value="CONTACTED">Contactés</option>
+              <option value="REPLIED">Ont Répondu</option>
+              <option value="WON">Gagnés</option>
+              <option value="LOST">Perdus</option>
+              <option value="DISMISSED">Écartés</option>
+            </select>
+          </div>
+
+          {/* City Quick Dropdown */}
+          <div className="min-w-[160px]">
+            <select
+              value={cityFilter}
+              onChange={e => { setCityFilter(e.target.value); setPage(1); }}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white"
+            >
+              <option value="">Toutes les villes</option>
+              {filterOptions.cities.map(c => (
+                <option key={c.city} value={c.city}>
+                  📍 {c.city} ({c.count})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Sorting Dropdown */}
+          <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
+            <select
+              value={sortBy}
+              onChange={e => { setSortBy(e.target.value); setPage(1); }}
+              className="px-2.5 py-1.5 bg-transparent text-xs font-semibold text-slate-700 outline-none"
+            >
+              <option value="createdAt">Date d'ajout</option>
+              <option value="opportunityScore">Score d'Opportunité</option>
+              <option value="auditScore">Score d'Audit</option>
+              <option value="companyName">Nom de l'entreprise</option>
+              <option value="city">Ville</option>
+            </select>
+            <button
+              onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
+              className="p-1.5 hover:bg-white rounded-lg text-slate-500 hover:text-slate-900 transition-colors"
+              title={sortOrder === 'desc' ? 'Ordre décroissant (cliquer pour inverser)' : 'Ordre croissant (cliquer pour inverser)'}
+            >
+              <ArrowUpDown className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Scope Selector (Team vs Personal) */}
+          <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => { setScopeFilter('team'); setPage(1); }}
+              className={cn("px-2.5 py-1.5 rounded-lg transition-all text-[11px]",
+                scopeFilter === 'team' ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
+              )}
+            >
+              👥 Équipe
+            </button>
+            <button
+              type="button"
+              onClick={() => { setScopeFilter('personal'); setPage(1); }}
+              className={cn("px-2.5 py-1.5 rounded-lg transition-all text-[11px]",
+                scopeFilter === 'personal' ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-900"
+              )}
+            >
+              👤 Mes Leads
+            </button>
+          </div>
+        </div>
+
+        {/* Expandable Advanced Filter Panel */}
+        {showFiltersDrawer && (
+          <div className="pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-top-1 duration-200">
+            {/* Category / Profession Filter */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Activité / Métier</label>
+              <select
+                value={categoryFilter}
+                onChange={e => { setCategoryFilter(e.target.value); setPage(1); }}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
+              >
+                <option value="">Toutes les activités</option>
+                {filterOptions.categories.map(cat => (
+                  <option key={cat.category} value={cat.category}>
+                    {cat.category} ({cat.count})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Direct Contact Channels */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Canal de Contact</label>
+              <select
+                value={contactFilter}
+                onChange={e => { setContactFilter(e.target.value); setPage(1); }}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
+              >
+                <option value="all">Tous les canaux</option>
+                <option value="has_phone">📞 Avec Téléphone direct</option>
+                <option value="has_email">✉️ Avec Email officiel</option>
+                <option value="has_both">🎯 Téléphone ET Email (Complet)</option>
+                <option value="missing_phone">🚫 Sans Téléphone</option>
+              </select>
+            </div>
+
+            {/* Web Presence & Digital Opportunity */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Présence Web & Vitrine</label>
+              <select
+                value={websiteFilter}
+                onChange={e => { setWebsiteFilter(e.target.value); setPage(1); }}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
+              >
+                <option value="all">Tous les états de site</option>
+                <option value="no_website">🚀 Sans Site Web (Cible prioritaire)</option>
+                <option value="has_website">🌐 Avec Site Web existant</option>
+                <option value="verified">✅ Site Web Vérifié</option>
+                <option value="unreachable">⚠️ Site Inaccessible / En panne</option>
+                <option value="social_profile">📱 Réseau social uniquement</option>
+              </select>
+            </div>
+
+            {/* Potential & Audit Filter */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Potentiel & Audit</label>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={oppScoreFilter}
+                  onChange={e => { setOppScoreFilter(e.target.value); setPage(1); }}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-medium text-slate-700 outline-none"
+                >
+                  <option value="all">Score Opp.</option>
+                  <option value="high">🔥 ≥ 60</option>
+                  <option value="medium">⚡ 30 à 59</option>
+                  <option value="low">Faible &lt;30</option>
+                </select>
+                <select
+                  value={auditFilter}
+                  onChange={e => { setAuditFilter(e.target.value); setPage(1); }}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-medium text-slate-700 outline-none"
+                >
+                  <option value="all">Audit Tech</option>
+                  <option value="audited">Déjà Audité</option>
+                  <option value="not_audited">Non Audité</option>
+                  <option value="good">Score ≥ 70</option>
+                  <option value="needs_work">Score &lt; 70</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Active Filter Badges Bar */}
+        {hasActiveFilters && (
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2 text-xs">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Filtres actifs :</span>
+              {debouncedSearch && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg font-medium text-[11px]">
+                  Recherche : "{debouncedSearch}"
+                  <button onClick={() => setSearch('')} className="hover:text-slate-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {statusFilter && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg font-medium text-[11px]">
+                  Statut : {statusFilter}
+                  <button onClick={() => setStatusFilter('')} className="hover:text-blue-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {cityFilter && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-medium text-[11px]">
+                  Ville : {cityFilter}
+                  <button onClick={() => setCityFilter('')} className="hover:text-indigo-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {categoryFilter && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-50 text-violet-700 rounded-lg font-medium text-[11px]">
+                  Métier : {categoryFilter}
+                  <button onClick={() => setCategoryFilter('')} className="hover:text-violet-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {contactFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg font-medium text-[11px]">
+                  Contact : {contactFilter}
+                  <button onClick={() => setContactFilter('all')} className="hover:text-emerald-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {websiteFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 rounded-lg font-medium text-[11px]">
+                  Web : {websiteFilter === 'no_website' ? 'Sans site web' : websiteFilter}
+                  <button onClick={() => setWebsiteFilter('all')} className="hover:text-amber-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {oppScoreFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-50 text-sky-700 rounded-lg font-medium text-[11px]">
+                  Opp : {oppScoreFilter}
+                  <button onClick={() => setOppScoreFilter('all')} className="hover:text-sky-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {auditFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-50 text-purple-700 rounded-lg font-medium text-[11px]">
+                  Audit : {auditFilter}
+                  <button onClick={() => setAuditFilter('all')} className="hover:text-purple-950 font-bold ml-1">×</button>
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={resetAllFilters}
+              className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-red-600 transition-colors ml-auto"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Réinitialiser tous les filtres
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Main Results Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden min-h-[400px]">
         {loading ? (
-          <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-slate-200" /></div>
+          <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-slate-300" /></div>
         ) : leads.length === 0 ? (
           <div className="p-20 text-center space-y-4">
-            <Database className="w-12 h-12 text-slate-100 mx-auto" />
-            <p className="text-slate-400 font-medium">No prospects match your current filters.</p>
+            <Database className="w-12 h-12 text-slate-200 mx-auto" />
+            <div className="space-y-1">
+              <p className="text-sm font-bold text-slate-700">Aucun prospect ne correspond à ces critères</p>
+              <p className="text-xs text-slate-400">Essayez d'élargir la recherche ou de réinitialiser vos filtres.</p>
+            </div>
+            {hasActiveFilters && (
+              <button
+                onClick={resetAllFilters}
+                className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-slate-800 transition-all inline-flex items-center gap-1.5 shadow-sm"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Effacer les filtres
+              </button>
+            )}
           </div>
         ) : (
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50/50 text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] border-b border-slate-100">
-              <tr>
-                <th className="px-6 py-4 w-10">
-                  <input type="checkbox" checked={selectedLeads.length === leads.length} onChange={toggleSelectAll} className="rounded border-slate-300 text-slate-900 focus:ring-slate-900" />
-                </th>
-                <th className="px-6 py-4">Company</th>
-                <th className="px-6 py-4">Website</th>
-                <th className="px-6 py-4 text-center">Audit</th>
-                <th className="px-6 py-4 text-center">Opportunity</th>
-                <th className="px-6 py-4 text-center">Contact Direct</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {leads.map((lead) => (
-                <tr key={lead.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => onSelectLead(lead.id)}>
-                  <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={selectedLeads.includes(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-slate-300 text-slate-900 focus:ring-slate-900" />
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors flex items-center gap-1.5">
-                      <span>{lead.companyName}</span>
-                      {(lead.phone || lead.website || lead.email) && (
-                        <span title="Lead avec canal de contact vérifié" className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{lead.city || 'Region'}</span>
-                      <div className="flex items-center gap-1.5 border-l border-slate-200 pl-2">
-                        {lead.phone && <span title={`Téléphone vérifié: ${lead.phone}`}><Phone className="w-2.5 h-2.5 text-emerald-600" /></span>}
-                        {lead.email && <span title={`Email vérifié: ${lead.email}`}><Mail className="w-2.5 h-2.5 text-blue-600" /></span>}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-[11px] font-medium text-slate-600 truncate max-w-[180px]">
-                      {lead.website ? (
-                        <a href={lead.website} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="hover:underline text-blue-600">
-                          {lead.website.replace(/^https?:\/\/(www\.)?/, '')}
-                        </a>
-                      ) : (
-                        <span className="text-slate-400 italic">No website found</span>
-                      )}
-                    </div>
-                    <div className="mt-1">
-                      <span className={cn("text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
-                        lead.websiteStatus === 'verified' ? 'bg-emerald-50 text-emerald-700' :
-                        lead.websiteStatus === 'unreachable' ? 'bg-red-50 text-red-700' :
-                        lead.websiteStatus === 'not_detected' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'
-                      )}>
-                        {lead.websiteStatus || 'unknown'}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <span className={cn("text-xs font-bold", (lead.auditScore || 0) > 70 ? 'text-emerald-500' : 'text-slate-300')}>{lead.auditScore ?? '—'}</span>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <span className={cn("text-xs font-extrabold", (lead.opportunityScore || 0) > 60 ? 'text-blue-600' : 'text-slate-400')}>{lead.opportunityScore ?? 0}</span>
-                  </td>
-                  <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center justify-center gap-1.5">
-                      {lead.phone ? (
-                        <>
-                          <a
-                            href={`https://wa.me/${formatWhatsAppNumber(lead.phone, lead.country)}?text=${encodeURIComponent(`Bonjour, je me permets de vous contacter au sujet de ${lead.companyName} à ${lead.city || 'votre secteur'}. Auriez-vous 2 minutes pour échanger ?`)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-md transition-all shadow-2xs"
-                            title={`Ouvrir WhatsApp (+${formatWhatsAppNumber(lead.phone, lead.country)})`}
-                          >
-                            <MessageCircle className="w-3.5 h-3.5" />
-                          </a>
-                          <a
-                            href={`tel:${lead.phone}`}
-                            className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-md transition-all shadow-2xs"
-                            title={`Appeler directement (${lead.phone})`}
-                          >
-                            <Phone className="w-3.5 h-3.5" />
-                          </a>
-                        </>
-                      ) : (
-                        <span className="text-[10px] text-slate-300 italic">Sans tél</span>
-                      )}
-
-                      {lead.email && (
-                        <a
-                          href={`mailto:${lead.email}?subject=${encodeURIComponent(`Opportunité visibilité pour ${lead.companyName}`)}`}
-                          className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-all shadow-2xs"
-                          title={`Envoyer un email (${lead.email})`}
-                        >
-                          <Mail className="w-3.5 h-3.5" />
-                        </a>
-                      )}
-
-                      <button
-                        onClick={() => setCommercialLead(lead)}
-                        className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md text-[10px] font-bold tracking-wide transition-all shadow-2xs flex items-center gap-1"
-                        title="Ouvrir le Kit Commercial (Script d'appel, objections, WhatsApp, logger CRM)"
-                      >
-                        <Briefcase className="w-3 h-3 text-amber-700" />
-                        Pitch
-                      </button>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider", 
-                      lead.leadStatus === 'WON' ? 'bg-emerald-50 text-emerald-700' : 
-                      lead.leadStatus === 'LOST' ? 'bg-red-50 text-red-700' : 
-                      lead.leadStatus === 'NEW' ? 'bg-slate-100 text-slate-600' : 'bg-blue-50 text-blue-700'
-                    )}>{lead.leadStatus}</span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          runSingleAuditFR(lead.id);
-                        }}
-                        disabled={rowAuditing === lead.id}
-                        className="opacity-0 group-hover:opacity-100 px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-md text-[10px] font-bold tracking-wide transition-all shadow-2xs flex items-center gap-1"
-                        title="Réaliser l'audit en français pour ce prospect"
-                      >
-                        {rowAuditing === lead.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <BarChart3 className="w-2.5 h-2.5 text-blue-600" />}
-                        Audit FR 🇫🇷
-                      </button>
-                      <ChevronRight className="w-4 h-4 text-slate-300" />
-                    </div>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50/70 text-[10px] font-bold text-slate-400 uppercase tracking-[0.15em] border-b border-slate-100">
+                <tr>
+                  <th className="px-6 py-4 w-10">
+                    <input 
+                      type="checkbox" 
+                      checked={selectedLeads.length === leads.length && leads.length > 0} 
+                      onChange={toggleSelectAll} 
+                      className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer" 
+                    />
+                  </th>
+                  <th className="px-6 py-4">Entreprise & Ville</th>
+                  <th className="px-6 py-4">Site Web & Détection</th>
+                  <th className="px-6 py-4 text-center">Score Audit</th>
+                  <th className="px-6 py-4 text-center">Opportunité</th>
+                  <th className="px-6 py-4 text-center">Contact Direct</th>
+                  <th className="px-6 py-4">Statut CRM</th>
+                  <th className="px-6 py-4"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {leads.map((lead) => (
+                  <tr key={lead.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => onSelectLead(lead.id)}>
+                    <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
+                      <input 
+                        type="checkbox" 
+                        checked={selectedLeads.includes(lead.id)} 
+                        onChange={() => toggleSelect(lead.id)} 
+                        className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer" 
+                      />
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors flex items-center gap-1.5">
+                        <span>{lead.companyName}</span>
+                        {(lead.phone || lead.website || lead.email) && (
+                          <span title="Lead avec canal de contact vérifié" className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{lead.city || 'Région'}</span>
+                        {lead.category && (
+                          <span className="text-[10px] text-slate-400 border-l border-slate-200 pl-2 truncate max-w-[140px]">{lead.category}</span>
+                        )}
+                        <div className="flex items-center gap-1.5 border-l border-slate-200 pl-2">
+                          {lead.phone && <span title={`Téléphone vérifié: ${lead.phone}`}><Phone className="w-2.5 h-2.5 text-emerald-600" /></span>}
+                          {lead.email && <span title={`Email vérifié: ${lead.email}`}><Mail className="w-2.5 h-2.5 text-blue-600" /></span>}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-[11px] font-medium text-slate-600 truncate max-w-[180px]">
+                        {lead.website ? (
+                          <a href={lead.website} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="hover:underline text-blue-600 flex items-center gap-1">
+                            {lead.website.replace(/^https?:\/\/(www\.)?/, '')}
+                            <ExternalLink className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                          </a>
+                        ) : (
+                          <span className="text-amber-700/80 font-bold text-[11px] flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-amber-500 shrink-0" />
+                            Sans site web
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1">
+                        <span className={cn("text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
+                          lead.websiteStatus === 'verified' ? 'bg-emerald-50 text-emerald-700' :
+                          lead.websiteStatus === 'unreachable' ? 'bg-red-50 text-red-700' :
+                          lead.websiteStatus === 'social_profile' ? 'bg-indigo-50 text-indigo-700' :
+                          lead.websiteStatus === 'not_detected' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'
+                        )}>
+                          {lead.websiteStatus === 'verified' ? 'Vérifié' :
+                           lead.websiteStatus === 'not_detected' ? 'Non détecté' :
+                           lead.websiteStatus === 'social_profile' ? 'Réseau Social' :
+                           lead.websiteStatus === 'unreachable' ? 'Inaccessible' : (lead.websiteStatus || 'Inconnu')}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className={cn("text-xs font-bold", (lead.auditScore || 0) > 70 ? 'text-emerald-500' : (lead.auditScore || 0) > 40 ? 'text-amber-500' : 'text-slate-300')}>
+                        {lead.auditScore ?? '—'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className={cn("text-xs font-black", (lead.opportunityScore || 0) >= 60 ? 'text-blue-600 font-extrabold' : 'text-slate-400')}>
+                        {lead.opportunityScore ?? 0}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-center gap-1.5">
+                        {lead.phone ? (
+                          <>
+                            <a
+                              href={`https://wa.me/${formatWhatsAppNumber(lead.phone, lead.country)}?text=${encodeURIComponent(`Bonjour, je me permets de vous contacter au sujet de ${lead.companyName} à ${lead.city || 'votre secteur'}. Auriez-vous 2 minutes pour échanger ?`)}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-md transition-all shadow-2xs"
+                              title={`Ouvrir WhatsApp (+${formatWhatsAppNumber(lead.phone, lead.country)})`}
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" />
+                            </a>
+                            <a
+                              href={`tel:${lead.phone}`}
+                              className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-md transition-all shadow-2xs"
+                              title={`Appeler directement (${lead.phone})`}
+                            >
+                              <Phone className="w-3.5 h-3.5" />
+                            </a>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-300 italic">Sans tél</span>
+                        )}
+
+                        {lead.email && (
+                          <a
+                            href={`mailto:${lead.email}?subject=${encodeURIComponent(`Opportunité visibilité pour ${lead.companyName}`)}`}
+                            className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-all shadow-2xs"
+                            title={`Envoyer un email (${lead.email})`}
+                          >
+                            <Mail className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+
+                        <button
+                          onClick={() => setCommercialLead(lead)}
+                          className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md text-[10px] font-bold tracking-wide transition-all shadow-2xs flex items-center gap-1"
+                          title="Ouvrir le Kit Commercial (Script d'appel, objections, WhatsApp, logger CRM)"
+                        >
+                          <Briefcase className="w-3 h-3 text-amber-700" />
+                          Pitch
+                        </button>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      {(() => {
+                        const STATUS_MAP: Record<string, { label: string; cls: string }> = {
+                          'WON': { label: 'GAGNÉ', cls: 'bg-emerald-50 text-emerald-700' },
+                          'LOST': { label: 'PERDU', cls: 'bg-red-50 text-red-700' },
+                          'NEW': { label: 'NOUVEAU', cls: 'bg-slate-100 text-slate-600' },
+                          'QUALIFIED': { label: 'QUALIFIÉ', cls: 'bg-indigo-50 text-indigo-700' },
+                          'REVIEWED': { label: 'EXAMINÉ', cls: 'bg-blue-50 text-blue-700' },
+                          'CONTACTED': { label: 'CONTACTÉ', cls: 'bg-amber-50 text-amber-700' },
+                          'REPLIED': { label: 'RÉPONDU', cls: 'bg-teal-50 text-teal-700' },
+                          'DISMISSED': { label: 'ÉCARTÉ', cls: 'bg-slate-100 text-slate-400' }
+                        };
+                        const st = STATUS_MAP[lead.leadStatus] || { label: lead.leadStatus, cls: 'bg-blue-50 text-blue-700' };
+                        return (
+                          <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider", st.cls)}>
+                            {st.label}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            runSingleAuditFR(lead.id);
+                          }}
+                          disabled={rowAuditing === lead.id}
+                          className="opacity-0 group-hover:opacity-100 px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-md text-[10px] font-bold tracking-wide transition-all shadow-2xs flex items-center gap-1"
+                          title="Réaliser l'audit en français pour ce prospect"
+                        >
+                          {rowAuditing === lead.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <BarChart3 className="w-2.5 h-2.5 text-blue-600" />}
+                          Audit FR 🇫🇷
+                        </button>
+                        <ChevronRight className="w-4 h-4 text-slate-300" />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Pagination & Results Footer */}
+        {totalLeads > 0 && (
+          <div className="bg-slate-50/70 px-6 py-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-4 text-xs text-slate-600">
+            <div className="flex items-center gap-2 font-medium">
+              <span>Affichage de {((page - 1) * pageSize) + 1} à {Math.min(page * pageSize, totalLeads)} sur {totalLeads} prospects</span>
+              {hasActiveFilters && (
+                <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-2 py-0.5 rounded">Filtres actifs</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              {/* Page Size Selector */}
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <span>Par page :</span>
+                <select
+                  value={pageSize}
+                  onChange={e => { setPageSize(parseInt(e.target.value)); setPage(1); }}
+                  className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+              </div>
+
+              {/* Prev / Next Page Buttons */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  disabled={page <= 1}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-xs disabled:opacity-40 hover:bg-slate-100 transition-colors"
+                >
+                  Précédent
+                </button>
+                <span className="text-xs font-bold text-slate-700 px-2">
+                  {page} / {totalPages}
+                </span>
+                <button
+                  disabled={page >= totalPages}
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-xs disabled:opacity-40 hover:bg-slate-100 transition-colors"
+                >
+                  Suivant
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
@@ -1797,7 +2360,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <button onClick={onBack} className="text-[10px] font-bold text-slate-400 hover:text-slate-900 flex items-center gap-2 uppercase tracking-[0.2em] transition-colors">
-          <ArrowRight className="w-3 h-3 rotate-180" /> Back to Database
+          <ArrowRight className="w-3 h-3 rotate-180" /> Retour aux Prospects
         </button>
         
         <div className="flex items-center gap-2 flex-wrap">
@@ -1806,7 +2369,16 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
             onChange={(e) => handleStatusChange(e.target.value)}
             className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] outline-none hover:border-slate-300 transition-colors shadow-sm"
           >
-            {['NEW', 'REVIEWED', 'QUALIFIED', 'CONTACTED', 'REPLIED', 'MEETING', 'PROPOSAL', 'WON', 'LOST', 'DISMISSED'].map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="NEW">NOUVEAU</option>
+            <option value="REVIEWED">EXAMINÉ</option>
+            <option value="QUALIFIED">QUALIFIÉ</option>
+            <option value="CONTACTED">CONTACTÉ</option>
+            <option value="REPLIED">RÉPONDU</option>
+            <option value="MEETING">RENDEZ-VOUS</option>
+            <option value="PROPOSAL">PROPOSITION</option>
+            <option value="WON">GAGNÉ</option>
+            <option value="LOST">PERDU</option>
+            <option value="DISMISSED">ÉCARTÉ</option>
           </select>
           <button 
             disabled={scraping}
@@ -1815,7 +2387,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
             title="Extraire le maximum d'informations du site et des réseaux sociaux"
           >
             {scraping ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-            {scraping ? 'Extraction...' : 'Deep Scrape'}
+            {scraping ? 'Extraction...' : 'Enrichir / Deep Scrape'}
           </button>
           
           {/* Explicit French Audit Option */}
@@ -1827,17 +2399,6 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
           >
             {auditing && auditLang === 'fr' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
             {auditing && auditLang === 'fr' ? 'Audit FR...' : 'Audit FR 🇫🇷'}
-          </button>
-
-          {/* Standard Audit Option */}
-          <button 
-            disabled={auditing}
-            onClick={() => runAudit('en')}
-            className="px-3 py-2 bg-slate-900 text-white rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition-all"
-            title="Start English Audit"
-          >
-            {auditing && auditLang === 'en' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            {auditing && auditLang === 'en' ? 'Auditing...' : 'Audit EN 🇬🇧'}
           </button>
 
           {/* Commercial Outreach Toolkit Button */}
@@ -1874,10 +2435,10 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
             {lead.websiteStatus === 'social_profile' && (
               <div className="p-3 bg-indigo-50/80 border border-indigo-100 rounded-xl space-y-1">
                 <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-xs">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" /> Social Presence Verified
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" /> Présence Sociale Vérifiée
                 </div>
                 <p className="text-[10px] text-indigo-900/80 leading-relaxed font-medium">
-                  No standard website found. Primary digital identity extracted directly from official social media.
+                  Aucun site officiel détecté. Présence numérique extraite directement depuis les réseaux sociaux officiels de l'établissement.
                 </p>
               </div>
             )}
@@ -1885,7 +2446,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
             <div className="space-y-4">
               <div className="flex items-start gap-3">
                 <MapPin className="w-4 h-4 text-slate-300 shrink-0 mt-0.5" />
-                <span className="text-xs font-medium text-slate-600">{lead.address || 'Loc. Unknown'}, {lead.city}, {lead.country}</span>
+                <span className="text-xs font-medium text-slate-600">{lead.address || 'Adresse locale non précisée'}, {lead.city}, {lead.country}</span>
               </div>
               {lead.phone && (
                 <div className="flex items-center gap-3">
@@ -1912,7 +2473,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
               {lead.googleRating && (
                 <div className="flex items-center gap-3">
                   <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
-                  <span className="text-xs font-bold text-slate-600">{lead.googleRating} <span className="text-slate-400 font-medium">({lead.googleReviews} rev.)</span></span>
+                  <span className="text-xs font-bold text-slate-600">{lead.googleRating} <span className="text-slate-400 font-medium">({lead.googleReviews} avis)</span></span>
                 </div>
               )}
             </div>
@@ -1925,7 +2486,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
 
               return (
                 <div className="space-y-2 pt-4 border-t border-slate-100">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Social Media Channels</span>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Réseaux Sociaux Identifiés</span>
                   <div className="flex flex-wrap gap-1.5">
                     {foundSocials.map((s: any) => {
                       const name = s.fieldName.toLowerCase();
@@ -1962,9 +2523,9 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
           </div>
 
           <div className="bg-slate-900 p-6 rounded-2xl text-white space-y-3 shadow-xl shadow-slate-900/10">
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-50">Opportunity Engine</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-50">Moteur d'Opportunités</p>
             <div className="text-4xl font-black">{lead.opportunityScore || 0}<span className="text-base font-bold opacity-30">/100</span></div>
-            <p className="text-[11px] opacity-70 font-medium leading-relaxed italic border-l-2 border-white/10 pl-3">Detected {lead.opportunities?.length || 0} business gaps.</p>
+            <p className="text-[11px] opacity-70 font-medium leading-relaxed italic border-l-2 border-white/10 pl-3">{lead.opportunities?.length || 0} opportunités commerciales identifiées.</p>
           </div>
         </div>
 
@@ -2077,7 +2638,7 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
       {/* Activity Timeline */}
       <div className="lg:col-span-3 space-y-6">
         <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-          <Clock className="w-3 h-3" /> Timeline
+          <Clock className="w-3 h-3" /> Historique des Échanges & Actions
         </h4>
         <div className="space-y-6 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[1px] before:bg-slate-100">
           {activities.map((act) => (
@@ -2094,7 +2655,7 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
               {act.metadata?.reason && <p className="text-[11px] text-slate-500 italic">"{act.metadata.reason}"</p>}
             </div>
           ))}
-          {activities.length === 0 && <p className="text-xs text-slate-400 italic pl-8">No activities recorded yet.</p>}
+          {activities.length === 0 && <p className="text-xs text-slate-400 italic pl-8">Aucune action enregistrée pour le moment.</p>}
         </div>
       </div>
 
@@ -2103,13 +2664,13 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
         {/* Notes Section */}
         <div className="space-y-4">
           <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-            <MessageSquare className="w-3 h-3" /> Notes
+            <MessageSquare className="w-3 h-3" /> Notes Internes & Suivi
           </h4>
           <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4 shadow-sm">
             <textarea 
               value={noteContent}
               onChange={e => setNoteContent(e.target.value)}
-              placeholder="Add a private note..."
+              placeholder="Ajouter une note de suivi confidentielle..."
               className="w-full text-xs font-medium bg-slate-50 border border-slate-100 rounded-lg p-3 min-h-[80px] focus:outline-none focus:ring-1 focus:ring-slate-900 transition-all placeholder:text-slate-300"
             />
             <button 
@@ -2117,7 +2678,7 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
               disabled={loading || !noteContent.trim()}
               className="w-full py-2 bg-slate-900 text-white rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all disabled:opacity-30"
             >
-              Post Note
+              Enregistrer la Note
             </button>
           </div>
           <div className="space-y-3">
@@ -2125,7 +2686,7 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
               <div key={note.id} className="bg-amber-50/50 p-4 rounded-xl border border-amber-100/50 space-y-2">
                 <p className="text-xs text-slate-700 font-medium leading-relaxed whitespace-pre-wrap">{note.content}</p>
                 <div className="flex justify-between items-center text-[9px] font-bold text-amber-600/60 uppercase">
-                  <span>User</span>
+                  <span>Collaborateur</span>
                   <span>{formatDate(note.createdAt)}</span>
                 </div>
               </div>
@@ -2136,7 +2697,7 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
         {/* Tasks Section */}
         <div className="space-y-4">
           <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-            <Calendar className="w-3 h-3" /> Next Actions
+            <Calendar className="w-3 h-3" /> Prochaines Actions & Rappels
           </h4>
           <div className="space-y-2">
             {tasks.map(task => (
@@ -2161,12 +2722,12 @@ function CRMTab({ leadId, token, onActivityChange }: any) {
             ))}
             <button 
               onClick={() => {
-                const title = prompt('Enter task description:');
+                const title = prompt('Description du rappel ou de la tâche :');
                 if (title) api.post(`/api/leads/${leadId}/tasks`, { title }, token).then(fetchData);
               }}
               className="w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-[10px] font-bold text-slate-400 uppercase tracking-widest hover:border-slate-400 hover:text-slate-600 transition-all flex items-center justify-center gap-2"
             >
-              <Plus className="w-3 h-3" /> Add Task
+              <Plus className="w-3 h-3" /> Ajouter un Rappel / Tâche
             </button>
           </div>
         </div>
@@ -2627,6 +3188,7 @@ function AITab({ leadId, token, lead, onOpenModalFR }: any) {
   const [activeOutreach, setActiveOutreach] = useState<'email' | 'short' | 'linkedin'>('email');
   const [language, setLanguage] = useState<'fr' | 'en'>('fr');
   const [tone, setTone] = useState<'consultative' | 'direct' | 'professional'>('consultative');
+  const [copiedNotice, setCopiedNotice] = useState(false);
 
   const fetchAI = (lang: string = language) => {
     api.get(`/api/leads/${leadId}/ai?language=${lang}`, token).then(res => { 
@@ -2651,6 +3213,17 @@ function AITab({ leadId, token, lead, onOpenModalFR }: any) {
   useEffect(() => {
     fetchAI('fr');
   }, [leadId, token]);
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    api.post(`/api/leads/${leadId}/activities`, { 
+      type: 'MESSAGE_COPIED', 
+      description: `Copied ${activeOutreach} template to clipboard`, 
+      origin: 'USER' 
+    }, token);
+    setCopiedNotice(true);
+    setTimeout(() => setCopiedNotice(false), 2500);
+  };
 
   if (aiAnalyzing) return (
     <div className="bg-white p-20 rounded-2xl border border-slate-200 shadow-sm text-center space-y-4">
@@ -2692,19 +3265,6 @@ function AITab({ leadId, token, lead, onOpenModalFR }: any) {
       </div>
     );
   }
-
-  const [copiedNotice, setCopiedNotice] = useState(false);
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    api.post(`/api/leads/${leadId}/activities`, { 
-      type: 'MESSAGE_COPIED', 
-      description: `Copied ${activeOutreach} template to clipboard`, 
-      origin: 'USER' 
-    }, token);
-    setCopiedNotice(true);
-    setTimeout(() => setCopiedNotice(false), 2500);
-  };
 
   const isFrench = language.startsWith('fr');
 
@@ -2901,15 +3461,39 @@ export default function App() {
 function DataQualityView({ token }: { token: string | null }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [isCleaning, setIsCleaning] = useState(false);
+  const [cleanResult, setCleanResult] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadData = () => {
     if (token) {
       api.get('/api/admin/data-quality', token).then((res) => {
         if (res.success) setData(res.data);
         setLoading(false);
       });
     }
+  };
+
+  useEffect(() => {
+    loadData();
   }, [token]);
+
+  const handleCleanDatabase = async () => {
+    setIsCleaning(true);
+    setCleanResult(null);
+    try {
+      const res = await api.post('/api/leads/clean-database', {}, token!);
+      if (res.success) {
+        setCleanResult(res.message || `Nettoyage terminé : ${res.updatedCount} prospects normalisés.`);
+        loadData();
+      } else {
+        setCleanResult(res.error || 'Erreur lors du nettoyage');
+      }
+    } catch (e: any) {
+      setCleanResult('Erreur : ' + e.message);
+    } finally {
+      setIsCleaning(false);
+    }
+  };
 
   if (loading || !data) return <div className="flex justify-center p-20"><Loader2 className="w-8 h-8 animate-spin text-slate-200" /></div>;
 
@@ -2918,38 +3502,55 @@ function DataQualityView({ token }: { token: string | null }) {
 
   return (
     <div className="space-y-10 pb-20">
-      <div className="space-y-2">
-        <h3 className="text-2xl font-black text-slate-900 tracking-tight">Beta Data Quality & Monitoring</h3>
-        <p className="text-sm text-slate-500 font-medium">Real-time performance metrics and reliability tracking for the LeadForge engine.</p>
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div className="space-y-2">
+          <h3 className="text-2xl font-black text-slate-900 tracking-tight">Qualité & Fiabilité des Données</h3>
+          <p className="text-sm text-slate-500 font-medium">Métriques de performance en temps réel, complétude des coordonnées et vérification des données LeadForge.</p>
+        </div>
+        <button
+          onClick={handleCleanDatabase}
+          disabled={isCleaning}
+          className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm"
+        >
+          {isCleaning ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          {isCleaning ? 'Normalisation...' : 'Normaliser & Nettoyer la Base'}
+        </button>
       </div>
+
+      {cleanResult && (
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 flex items-center justify-between animate-in fade-in">
+          <span>✓ {cleanResult}</span>
+          <button onClick={() => setCleanResult(null)} className="text-emerald-700 hover:text-emerald-950 font-bold">Fermer</button>
+        </div>
+      )}
 
       {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <QualityStatCard label="Lead Validity" value={stats.total > 0 ? Math.round(((stats.total - stats.withPhone) / stats.total) * 100) : 0} unit="%" subtext="With Phone Number" />
-        <QualityStatCard label="Website Verification" value={stats.total > 0 ? Math.round((stats.verifiedWebsite / (stats.total)) * 100) : 0} unit="%" subtext="Verified Reachable" />
-        <QualityStatCard label="Audit Rate" value={stats.total > 0 ? Math.round((stats.audited / stats.total) * 100) : 0} unit="%" subtext={`${stats.audited} audits performed`} />
-        <QualityStatCard label="Analysis Rate" value={stats.total > 0 ? Math.round((stats.analyzed / stats.total) * 100) : 0} unit="%" subtext={`${stats.analyzed} interpreted by AI`} />
+        <QualityStatCard label="Taux Téléphones Vérifiés" value={stats.total > 0 ? Math.round((stats.withPhone / stats.total) * 100) : 0} unit="%" subtext={`${stats.withPhone} numéros contactables`} />
+        <QualityStatCard label="Sites Web Vérifiés" value={stats.total > 0 ? Math.round((stats.verifiedWebsite / stats.total) * 100) : 0} unit="%" subtext={`${stats.verifiedWebsite} domaines actifs`} />
+        <QualityStatCard label="Taux d'Audits Réalisés" value={stats.total > 0 ? Math.round((stats.audited / stats.total) * 100) : 0} unit="%" subtext={`${stats.audited} audits complétés`} />
+        <QualityStatCard label="Analyses Commerciales IA" value={stats.total > 0 ? Math.round((stats.analyzed / stats.total) * 100) : 0} unit="%" subtext={`${stats.analyzed} diagnostics générés`} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Source Reliability */}
         <div className="lg:col-span-2 space-y-6">
-          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Source Distribution</h4>
+          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Distribution par Source d'Enrichissement</h4>
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                 <tr>
-                  <th className="px-6 py-4">Source</th>
-                  <th className="px-6 py-4 text-center">Leads Found</th>
-                  <th className="px-6 py-4 text-right">Avg Opp. Score</th>
+                  <th className="px-6 py-4">Source de Données</th>
+                  <th className="px-6 py-4 text-center">Prospects Extraits</th>
+                  <th className="px-6 py-4 text-right">Score Opportunité Moyen</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {sources.map((s: any) => (
                   <tr key={s.source} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4 font-bold text-slate-900 capitalize">{s.source || 'Manual'}</td>
+                    <td className="px-6 py-4 font-bold text-slate-900 capitalize">{s.source || 'Manuel'}</td>
                     <td className="px-6 py-4 text-center font-medium">{s.count}</td>
-                    <td className="px-6 py-4 text-right font-mono text-slate-400">{Math.round(s.avgOppScore || 0)}</td>
+                    <td className="px-6 py-4 text-right font-mono text-slate-500 font-bold">{Math.round(s.avgOppScore || 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2959,12 +3560,12 @@ function DataQualityView({ token }: { token: string | null }) {
 
         {/* Lead Quality Breakdown */}
         <div className="space-y-6">
-          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Lead Data Gaps</h4>
+          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Points d'Attention & Complétude</h4>
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-            <QualityProgressBar label="Missing Phone" value={stats.total - stats.withPhone} total={stats.total} color="bg-amber-500" />
-            <QualityProgressBar label="Missing Website" value={stats.total - stats.withWebsite} total={stats.total} color="bg-red-500" />
-            <QualityProgressBar label="Not Detected Website" value={stats.notDetectedWebsite} total={stats.total} color="bg-orange-500" />
-            <QualityProgressBar label="Unreachable Website" value={stats.unreachableWebsite} total={stats.total} color="bg-slate-400" />
+            <QualityProgressBar label="Sans Téléphone" value={stats.total - stats.withPhone} total={stats.total} color="bg-amber-500" />
+            <QualityProgressBar label="Sans Site Internet" value={stats.total - stats.withWebsite} total={stats.total} color="bg-red-500" />
+            <QualityProgressBar label="Site Non Détecté" value={stats.notDetectedWebsite} total={stats.total} color="bg-orange-500" />
+            <QualityProgressBar label="Site Inaccessible / Erreur" value={stats.unreachableWebsite} total={stats.total} color="bg-slate-400" />
           </div>
         </div>
       </div>
@@ -3031,7 +3632,7 @@ function ReviewSection({ entityId, entityType, token }: { entityId: number; enti
         isCorrect ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
       )}>
         {isCorrect ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-        Review Submitted: {isCorrect ? 'Accurate' : 'Inaccurate'}
+        Évaluation enregistrée : {isCorrect ? 'Donnée Conforme' : 'Donnée Inexacte'}
       </div>
     );
   }
@@ -3039,21 +3640,21 @@ function ReviewSection({ entityId, entityType, token }: { entityId: number; enti
   return (
     <div className="mt-6 pt-6 border-t border-slate-50 space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em]">Manual Data Review</span>
+        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em]">Contrôle Qualité Humain</span>
         <div className="flex gap-2">
           <button 
             disabled={submitting}
             onClick={() => handleSubmit(true)}
             className="px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-emerald-100 transition-colors flex items-center gap-1.5"
           >
-            <Check className="w-3 h-3" /> Correct
+            <Check className="w-3 h-3" /> Conforme
           </button>
           <button 
             disabled={submitting}
             onClick={() => handleSubmit(false)}
             className="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-red-100 transition-colors flex items-center gap-1.5"
           >
-            <AlertCircle className="w-3 h-3" /> Incorrect
+            <AlertCircle className="w-3 h-3" /> Inexact
           </button>
         </div>
       </div>
@@ -3061,7 +3662,7 @@ function ReviewSection({ entityId, entityType, token }: { entityId: number; enti
         type="text" 
         value={notes} 
         onChange={e => setNotes(e.target.value)}
-        placeholder="Add review notes (optional)..."
+        placeholder="Ajouter une remarque sur la qualité (optionnel)..."
         className="w-full px-3 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] font-medium focus:outline-none focus:ring-1 focus:ring-slate-900 placeholder:text-slate-300"
       />
     </div>
@@ -3096,31 +3697,31 @@ function EvidenceTab({ lead }: { lead: any }) {
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2.5 text-emerald-400">
             <ShieldCheck className="w-5 h-5 shrink-0" />
-            <h4 className="text-xs font-bold uppercase tracking-wider">Zero-Fabrication & Data Provenance Guarantee</h4>
+            <h4 className="text-xs font-bold uppercase tracking-wider">Garantie Données Réelles & Anti-Fabrication</h4>
           </div>
           <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-lg text-[10px] font-mono font-bold tracking-wide">
-            100% REAL PUBLIC DATA
+            100% DONNÉES RÉELLES & VÉRIFIÉES
           </span>
         </div>
         <p className="text-xs text-slate-300 leading-relaxed">
-          Every field value below was deterministically extracted from the official website, public social media profile, or OpenStreetMap record. <strong>LeadForge strictly prohibits fake, simulated, or invented contact details.</strong> If an email or phone is not publicly declared by the business, it remains empty (<code className="text-slate-400 font-mono">null</code>).
+          Chaque valeur ci-dessous a été extraite de manière déterministe depuis le site internet officiel, le profil public ou le registre OpenStreetMap. <strong>LeadForge interdit formellement toute invention ou génération de fausses coordonnées.</strong> Si un email ou un téléphone n'est pas publié officiellement par l'entreprise, le champ reste vide (<code className="text-slate-400 font-mono">null</code>).
         </p>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-white/10 text-center">
           <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Verified Fields</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Champs Vérifiés</span>
             <span className="text-base font-black text-white">{evidenceList.length}</span>
           </div>
           <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Contact Points</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Points de Contact</span>
             <span className="text-base font-black text-emerald-400">{contactCount}</span>
           </div>
           <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Social Channels</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Réseaux Sociaux</span>
             <span className="text-base font-black text-indigo-400">{socialCount}</span>
           </div>
           <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Fabricated Data</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Données Inventées</span>
             <span className="text-base font-black text-emerald-400">0%</span>
           </div>
         </div>
@@ -3128,23 +3729,26 @@ function EvidenceTab({ lead }: { lead: any }) {
 
       {/* Website & Social Presence Identity Card */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Presence Discovery & Channel Status</h4>
+        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">État du Canal & Détection Web</h4>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Channel Status</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Statut du Site</span>
             <span className={cn("text-xs font-extrabold uppercase px-2 py-0.5 rounded inline-block",
               lead.websiteStatus === 'verified' ? 'bg-emerald-100 text-emerald-800' :
               lead.websiteStatus === 'social_profile' ? 'bg-indigo-100 text-indigo-800' :
               lead.websiteStatus === 'unreachable' ? 'bg-red-100 text-red-800' :
               lead.websiteStatus === 'not_detected' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-            )}>{lead.websiteStatus === 'social_profile' ? 'Social Presence Only' : (lead.websiteStatus || 'unknown')}</span>
+            )}>{lead.websiteStatus === 'social_profile' ? 'Présence Sociale Seule' : 
+                lead.websiteStatus === 'verified' ? 'Vérifié & Actif' :
+                lead.websiteStatus === 'not_detected' ? 'Non Détecté' :
+                lead.websiteStatus === 'unreachable' ? 'Inaccessible' : (lead.websiteStatus || 'Inconnu')}</span>
           </div>
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Confidence Rating</span>
-            <span className="text-xs font-bold text-slate-800">{lead.websiteConfidence || lead.dataConfidence || 'UNKNOWN'}</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Indice de Confiance</span>
+            <span className="text-xs font-bold text-slate-800">{lead.websiteConfidence || lead.dataConfidence || 'MOYENNE'}</span>
           </div>
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Enrichment Source</span>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Source Principale</span>
             <span className="text-xs font-medium text-slate-700 truncate block">{lead.enrichmentSource || lead.discoverySource || lead.source || 'OpenStreetMap'}</span>
           </div>
         </div>
@@ -3152,10 +3756,10 @@ function EvidenceTab({ lead }: { lead: any }) {
         {lead.website && (
           <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 text-xs text-blue-900 flex items-center justify-between flex-wrap gap-2">
             <span className="font-medium">
-              {lead.websiteStatus === 'social_profile' ? 'Verified Social Presence URL:' : 'Audited Website URL:'} <code className="bg-white px-1.5 py-0.5 rounded border border-blue-200 font-mono text-[11px]">{lead.website}</code>
+              {lead.websiteStatus === 'social_profile' ? 'URL du profil social vérifié :' : 'URL du site audité :'} <code className="bg-white px-1.5 py-0.5 rounded border border-blue-200 font-mono text-[11px]">{lead.website}</code>
             </span>
             <a href={lead.website} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-bold text-[11px]">
-              Open Source <ExternalLink className="w-3 h-3" />
+              Consulter <ExternalLink className="w-3 h-3" />
             </a>
           </div>
         )}
@@ -3165,17 +3769,17 @@ function EvidenceTab({ lead }: { lead: any }) {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
         <div className="p-6 border-b border-slate-100 flex items-center justify-between flex-wrap gap-4">
           <div>
-            <h4 className="text-sm font-bold text-slate-900">Extracted Real Facts ({filteredEvidence.length})</h4>
-            <p className="text-xs text-slate-500">Every record is backed by an exact URL and method extraction proof.</p>
+            <h4 className="text-sm font-bold text-slate-900">Preuves & Faits Numériques Extraits ({filteredEvidence.length})</h4>
+            <p className="text-xs text-slate-500">Chaque information est appuyée par une URL source et une méthode d'extraction certifiée.</p>
           </div>
 
           <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
             {[
-              { id: 'all', label: `All (${evidenceList.length})` },
-              { id: 'contact', label: `Contact (${contactCount})` },
-              { id: 'social', label: `Social Media (${socialCount})` },
-              { id: 'location', label: 'Location & Hours' },
-              { id: 'legal', label: 'Legal & Bio' },
+              { id: 'all', label: `Tout (${evidenceList.length})` },
+              { id: 'contact', label: `Contacts (${contactCount})` },
+              { id: 'social', label: `Réseaux (${socialCount})` },
+              { id: 'location', label: 'Adresse & Horaires' },
+              { id: 'legal', label: 'Légal & Gérant' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -3195,18 +3799,18 @@ function EvidenceTab({ lead }: { lead: any }) {
 
         {filteredEvidence.length === 0 ? (
           <div className="p-12 text-center text-slate-400 text-xs">
-            No field evidence recorded for this category yet. Click <strong>Deep Scrape & Extract</strong> above to crawl the site or social presence.
+            Aucune preuve factuelle enregistrée pour cette catégorie. Cliquez sur <strong>Enrichir / Deep Scrape</strong> ci-dessus pour explorer le site et les réseaux sociaux.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100">
                 <tr>
-                  <th className="px-6 py-3">Field</th>
-                  <th className="px-6 py-3">Verified Value</th>
-                  <th className="px-6 py-3">Extraction Method & Source</th>
-                  <th className="px-6 py-3">Confidence</th>
-                  <th className="px-6 py-3">Public Source URL</th>
+                  <th className="px-6 py-3">Champ</th>
+                  <th className="px-6 py-3">Valeur Vérifiée</th>
+                  <th className="px-6 py-3">Méthode & Source</th>
+                  <th className="px-6 py-3">Fiabilité</th>
+                  <th className="px-6 py-3">URL Source Publique</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -3226,7 +3830,7 @@ function EvidenceTab({ lead }: { lead: any }) {
                       <span className={cn("px-2 py-0.5 rounded text-[10px] font-extrabold uppercase",
                         ev.confidence === 'HIGH' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/50' :
                         ev.confidence === 'MEDIUM' ? 'bg-amber-50 text-amber-700 border border-amber-200/50' : 'bg-slate-100 text-slate-600'
-                      )}>{ev.confidence}</span>
+                      )}>{ev.confidence === 'HIGH' ? 'ÉLEVÉE' : ev.confidence === 'MEDIUM' ? 'MOYENNE' : 'FAIBLE'}</span>
                     </td>
                     <td className="px-6 py-3.5">
                       {ev.sourceUrl ? (
@@ -3247,9 +3851,9 @@ function EvidenceTab({ lead }: { lead: any }) {
 
       {/* Honest Empty Data Card */}
       <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 text-xs text-slate-600 space-y-1">
-        <p className="font-bold text-slate-800">Why are some fields empty?</p>
+        <p className="font-bold text-slate-800">Pourquoi certains champs sont-ils vides ?</p>
         <p className="leading-relaxed">
-          LeadForge guarantees strict anti-fabrication standards. If a business does not publish a direct email or phone on their official website, social media profile, or OpenStreetMap entry, LeadForge keeps the field empty (<code className="text-slate-500 font-mono">null</code>). We do NOT guess generic mailboxes (such as <code className="text-slate-500 font-mono">info@domain.com</code>) unless explicitly listed by the business.
+          LeadForge applique un standard strict d'intégrité des données. Si une entreprise ne publie pas d'adresse email ou de numéro de téléphone direct sur son site officiel, ses réseaux sociaux ou le cadastre OpenStreetMap, LeadForge conserve le champ vide (<code className="text-slate-500 font-mono">null</code>). Nous n'inventons jamais d'adresses génériques (<code className="text-slate-500 font-mono">contact@domaine.fr</code>) sans confirmation réelle.
         </p>
       </div>
     </div>
@@ -3279,19 +3883,19 @@ function SettingsView({ token }: { token: string }) {
   return (
     <div className="max-w-4xl space-y-8 animate-in fade-in duration-300">
       <div>
-        <h3 className="text-xl font-bold text-slate-900">Pipeline & Provider Configuration</h3>
-        <p className="text-xs text-slate-500">Transparent overview of LeadForge discovery sources, $0 MVP infrastructure, and optional search adapters.</p>
+        <h3 className="text-xl font-bold text-slate-900">Configuration du Pipeline & Sources</h3>
+        <p className="text-xs text-slate-500">Vue d'ensemble transparente des sources de détection LeadForge, infrastructure $0 MVP et adaptateurs de recherche.</p>
       </div>
 
       {/* $0 Free MVP Architecture */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
           <div>
-            <h4 className="text-sm font-bold text-slate-900">Zero-Cost Discovery Stack ($0 MVP)</h4>
-            <p className="text-xs text-slate-500">These components run out-of-the-box with no API keys, accounts, or credit card requirements.</p>
+            <h4 className="text-sm font-bold text-slate-900">Moteur de Découverte Sans Frais ($0 MVP)</h4>
+            <p className="text-xs text-slate-500">Ces composants fonctionnent nativement sans aucune clé API payante ni abonnement requis.</p>
           </div>
           <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider rounded-lg border border-emerald-100">
-            Active by Default
+            Actif par Défaut
           </span>
         </div>
 
@@ -3299,61 +3903,61 @@ function SettingsView({ token }: { token: string }) {
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-800">1. OpenStreetMap (Overpass API)</span>
-              <span className="text-[10px] font-bold text-emerald-600 uppercase">Primary Source</span>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase">Source Principale</span>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              Provides raw business discovery across nodes and ways. LeadForge applies mathematical grid partitioning and polite concurrency (1.2s backoff) to prevent Overpass 504/429 limits.
+              Découvre les commerces réels et artisans. LeadForge applique un partitionnement cartographique et un cache intelligent en mémoire pour une vitesse maximale.
             </p>
           </div>
 
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-800">2. Nominatim Geocoding</span>
-              <span className="text-[10px] font-bold text-emerald-600 uppercase">Geographic Coverage</span>
+              <span className="font-bold text-slate-800">2. Géocodage Nominatim</span>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase">Couverture Géographique</span>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              Computes master bounding boxes for cities, regions, and countries, enabling intelligent multi-cell division (up to 25 cells for 1,000 targets).
+              Calcule les délimitations géographiques exactes par ville ou région, divisant les recherches en sous-zones pour éviter toute limitation.
             </p>
           </div>
 
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-800">3. LeadForge Native Deep Crawler</span>
-              <span className="text-[10px] font-bold text-emerald-600 uppercase">Contact Enrichment</span>
+              <span className="font-bold text-slate-800">3. Crawler Natif Parallèle Cheerio</span>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase">Enrichissement Contacts</span>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              Crawls up to 8 pages per official domain (Home, Contact, About, Legal, Impressum) extracting real phones, mailto links, and WhatsApp CTAs with evidence logging.
+              Explore ultra-rapidement la page contact et les mentions légales pour extraire numéros de téléphone, SIRET, noms de gérants et coordonnées WhatsApp.
             </p>
           </div>
 
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-800">4. Local Domain & Identity Prober</span>
-              <span className="text-[10px] font-bold text-emerald-600 uppercase">Website Discovery</span>
+              <span className="font-bold text-slate-800">4. Sondeur de Domaines Locaux</span>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase">Détection de Site Web</span>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              Generates deterministic domain candidates from normalized company names + local country TLDs (.ch, .com, .fr, .de), checking page title and content before verifying.
+              Génère des candidats de domaines normalisés selon l'extension du pays (.fr, .ch, .be, .com) et vérifie la cohérence du contenu avant validation.
             </p>
           </div>
         </div>
       </div>
 
-      {/* DuckDuckGo Explanation Card */}
+      {/* Information sur les Politiques des Moteurs */}
       <div className="bg-amber-50/70 border border-amber-200/80 p-6 rounded-2xl space-y-3">
         <div className="flex items-center gap-2 text-amber-800">
           <Info className="w-4 h-4 shrink-0" />
-          <h4 className="text-xs font-bold uppercase tracking-wider">Search Engine Policy: DuckDuckGo Notice</h4>
+          <h4 className="text-xs font-bold uppercase tracking-wider">Note sur la Découverte et la Stabilité</h4>
         </div>
         <p className="text-xs text-amber-900/80 leading-relaxed">
-          <strong>Why DuckDuckGo is not an unauthenticated scraper in LeadForge:</strong> DuckDuckGo provides an "Instant Answer API" for Wikipedia definitions, but has <em>no official, permitted bulk search API</em> for commercial SERP scraping. Unofficial HTML scrapers violate terms of service, trigger automated Cloudflare CAPTCHAs, and fail at the scale of 100–1,000 leads. LeadForge strictly adheres to legitimate programmatic interfaces.
+          LeadForge privilégie les requêtes certifiées et le cadastre cartographique pour garantir une haute disponibilité, sans blocages CAPTCHA intempestifs ni interruptions de service à grande échelle.
         </p>
       </div>
 
-      {/* Optional Paid/Key Providers */}
+      {/* Adaptateurs Optionnels avec Clés */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
         <div className="border-b border-slate-100 pb-4">
-          <h4 className="text-sm font-bold text-slate-900">Optional External Search Adapters (Bring Your Own Key)</h4>
-          <p className="text-xs text-slate-500">If you wish to augment website discovery beyond OSM and Local Probing, configure any of these standard providers via environment variables:</p>
+          <h4 className="text-sm font-bold text-slate-900">Adaptateurs de Recherche Externes (Optionnels)</h4>
+          <p className="text-xs text-slate-500">Pour enrichir la recherche de sites web au-delà d'OpenStreetMap et du sondeur local, configurez simplement ces variables d'environnement :</p>
         </div>
 
         <div className="space-y-4 text-xs">
@@ -3361,15 +3965,15 @@ function SettingsView({ token }: { token: string }) {
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-slate-900">Google Custom Search JSON API</span>
-                <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">100 queries/day free</span>
+                <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">100 requêtes/jour offertes</span>
               </div>
-              <p className="text-slate-500 text-[11px]">Official Google search endpoint for locating company websites. Free tier includes 100 searches/day.</p>
+              <p className="text-slate-500 text-[11px]">API officielle Google pour localiser les sites d'entreprises locales.</p>
               <div className="font-mono text-[10px] text-slate-600 bg-white p-1.5 rounded border border-slate-200 mt-1 inline-block">
                 GOOGLE_SEARCH_API_KEY & GOOGLE_SEARCH_CX
               </div>
             </div>
             <span className="text-[10px] font-bold uppercase px-3 py-1 bg-slate-200 text-slate-600 rounded-lg text-center shrink-0">
-              Optional Key
+              Clé Optionnelle
             </span>
           </div>
 
@@ -3377,15 +3981,15 @@ function SettingsView({ token }: { token: string }) {
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-slate-900">Firecrawl API</span>
-                <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">Commercial Scraping Cloud</span>
+                <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">Crawler Cloud JavaScript</span>
               </div>
-              <p className="text-slate-500 text-[11px]">Specialized search & JavaScript web crawler service. Requires account signup.</p>
+              <p className="text-slate-500 text-[11px]">Service spécialisé de crawling et extraction web JavaScript.</p>
               <div className="font-mono text-[10px] text-slate-600 bg-white p-1.5 rounded border border-slate-200 mt-1 inline-block">
                 FIRECRAWL_API_KEY
               </div>
             </div>
             <span className="text-[10px] font-bold uppercase px-3 py-1 bg-slate-200 text-slate-600 rounded-lg text-center shrink-0">
-              Optional Key
+              Clé Optionnelle
             </span>
           </div>
 
@@ -3395,13 +3999,13 @@ function SettingsView({ token }: { token: string }) {
                 <span className="font-bold text-slate-900">Bing Web Search API</span>
                 <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">Azure Cognitive</span>
               </div>
-              <p className="text-slate-500 text-[11px]">Microsoft Azure Cognitive Services search API.</p>
+              <p className="text-slate-500 text-[11px]">API de recherche Microsoft Azure Cognitive Services.</p>
               <div className="font-mono text-[10px] text-slate-600 bg-white p-1.5 rounded border border-slate-200 mt-1 inline-block">
                 BING_SEARCH_API_KEY
               </div>
             </div>
             <span className="text-[10px] font-bold uppercase px-3 py-1 bg-slate-200 text-slate-600 rounded-lg text-center shrink-0">
-              Optional Key
+              Clé Optionnelle
             </span>
           </div>
         </div>

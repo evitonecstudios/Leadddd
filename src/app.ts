@@ -19,7 +19,7 @@ import { EnrichmentBot } from './services/enrichmentBot';
 import { SocialEnrichmentService } from './services/socialEnrichmentService';
 import { db } from './db/index';
 import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './db/schema';
-import { eq, and, sql, desc, isNull, isNotNull, ilike, or, gt, lt, ne } from 'drizzle-orm';
+import { eq, and, sql, desc, asc, isNull, isNotNull, ilike, or, gt, lt, gte, lte, ne, inArray } from 'drizzle-orm';
 import Papa from 'papaparse';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -126,18 +126,18 @@ export function createServerApp() {
 
       const counts = await db.select({
         total: sql<number>`count(*)`,
-        new: sql<number>`count(*) filter (where lead_status = 'NEW')`,
-        reviewed: sql<number>`count(*) filter (where lead_status = 'REVIEWED')`,
-        qualified: sql<number>`count(*) filter (where lead_status = 'QUALIFIED')`,
-        contacted: sql<number>`count(*) filter (where lead_status = 'CONTACTED')`,
-        replied: sql<number>`count(*) filter (where lead_status = 'REPLIED')`,
-        won: sql<number>`count(*) filter (where lead_status = 'WON')`,
-        websitesFound: sql<number>`count(*) filter (where website_status = 'verified')`,
-        websitesMissing: sql<number>`count(*) filter (where website_status = 'not_detected')`,
-        highOpportunity: sql<number>`count(*) filter (where opportunity_score > 60)`
+        new: sql<number>`count(*) filter (where ${leads.leadStatus} = 'NEW')`,
+        reviewed: sql<number>`count(*) filter (where ${leads.leadStatus} = 'REVIEWED')`,
+        qualified: sql<number>`count(*) filter (where ${leads.leadStatus} = 'QUALIFIED')`,
+        contacted: sql<number>`count(*) filter (where ${leads.leadStatus} = 'CONTACTED')`,
+        replied: sql<number>`count(*) filter (where ${leads.leadStatus} = 'REPLIED')`,
+        won: sql<number>`count(*) filter (where ${leads.leadStatus} = 'WON')`,
+        websitesFound: sql<number>`count(*) filter (where ${leads.websiteStatus} = 'verified')`,
+        websitesMissing: sql<number>`count(*) filter (where ${leads.websiteStatus} = 'not_detected')`,
+        highOpportunity: sql<number>`count(*) filter (where ${leads.opportunityScore} > 60)`
       })
       .from(leads)
-      .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
+      .leftJoin(campaigns, eq(leads.campaignId, campaigns.id))
       .where(and(...filterConditions));
 
       const oppCounts = await db.select({
@@ -146,7 +146,7 @@ export function createServerApp() {
       })
       .from(opportunities)
       .innerJoin(leads, eq(opportunities.leadId, leads.id))
-      .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
+      .leftJoin(campaigns, eq(leads.campaignId, campaigns.id))
       .where(and(...filterConditions))
       .groupBy(opportunities.type);
 
@@ -164,61 +164,285 @@ export function createServerApp() {
     }
   });
 
-  // Leads with Filtering, Sorting, Pagination
+  // Helper: Build Flexible Lead Conditions
+  function buildLeadConditions(query: any, userId?: number) {
+    const conditions: any[] = [isNull(leads.deletedAt)];
+
+    if (query.scope === 'personal' && userId) {
+      conditions.push(eq(campaigns.userId, userId));
+    }
+
+    // Flexible multi-token search across companyName, city, category, address, website, email, notes, and phone
+    if (query.search && typeof query.search === 'string') {
+      const rawSearch = query.search.trim();
+      if (rawSearch) {
+        const terms = rawSearch.split(/\s+/).filter(Boolean);
+        for (const term of terms) {
+          const pattern = `%${term}%`;
+          const digitsOnly = term.replace(/[^\d]/g, '');
+          const phoneMatch = digitsOnly.length >= 2 
+            ? or(
+                ilike(leads.normalizedPhone, `%${digitsOnly}%`),
+                ilike(leads.phone, `%${digitsOnly}%`)
+              )
+            : null;
+
+          const termConditions: any[] = [
+            ilike(leads.companyName, pattern),
+            ilike(leads.city, pattern),
+            ilike(leads.category, pattern),
+            ilike(leads.address, pattern),
+            ilike(leads.website, pattern),
+            ilike(leads.email, pattern),
+            ilike(leads.notes, pattern),
+            ilike(leads.phone, pattern)
+          ];
+
+          if (phoneMatch) {
+            termConditions.push(phoneMatch);
+          }
+
+          conditions.push(or(...termConditions));
+        }
+      }
+    }
+
+    // Status Filter: supports single, comma-separated list, or array
+    const statusParam = query.status;
+    if (statusParam && statusParam !== 'ALL' && statusParam !== 'all') {
+      const statuses = (Array.isArray(statusParam) ? statusParam : String(statusParam).split(','))
+        .map(s => String(s).trim().toUpperCase())
+        .filter(Boolean);
+      
+      if (statuses.length === 1) {
+        conditions.push(eq(leads.leadStatus, statuses[0]));
+      } else if (statuses.length > 1) {
+        conditions.push(inArray(leads.leadStatus, statuses));
+      }
+    }
+
+    // City Filter: flexible case-insensitive partial match or multiple
+    if (query.city && query.city !== 'ALL' && query.city !== 'all') {
+      const cities = String(query.city).split(',').map(c => c.trim()).filter(Boolean);
+      if (cities.length === 1) {
+        conditions.push(ilike(leads.city, `%${cities[0]}%`));
+      } else if (cities.length > 1) {
+        conditions.push(or(...cities.map(c => ilike(leads.city, `%${c}%`))));
+      }
+    }
+
+    // Category / Activity Filter: flexible case-insensitive partial match or multiple
+    if (query.category && query.category !== 'ALL' && query.category !== 'all') {
+      const cats = String(query.category).split(',').map(c => c.trim()).filter(Boolean);
+      if (cats.length === 1) {
+        conditions.push(ilike(leads.category, `%${cats[0]}%`));
+      } else if (cats.length > 1) {
+        conditions.push(or(...cats.map(c => ilike(leads.category, `%${c}%`))));
+      }
+    }
+
+    // Country Filter
+    if (query.country && query.country !== 'ALL' && query.country !== 'all') {
+      conditions.push(ilike(leads.country, `%${String(query.country).trim()}%`));
+    }
+
+    // Contact Channel Filter
+    const contact = query.contactFilter || query.contact;
+    if (contact === 'has_phone' || query.hasPhone === 'true') {
+      conditions.push(and(isNotNull(leads.phone), ne(leads.phone, '')));
+    } else if (contact === 'missing_phone' || query.hasPhone === 'false') {
+      conditions.push(or(isNull(leads.phone), eq(leads.phone, '')));
+    } else if (contact === 'has_email' || query.hasEmail === 'true') {
+      conditions.push(and(isNotNull(leads.email), ne(leads.email, '')));
+    } else if (contact === 'missing_email' || query.hasEmail === 'false') {
+      conditions.push(or(isNull(leads.email), eq(leads.email, '')));
+    } else if (contact === 'has_both') {
+      conditions.push(and(
+        isNotNull(leads.phone), ne(leads.phone, ''),
+        isNotNull(leads.email), ne(leads.email, '')
+      ));
+    } else if (contact === 'has_either') {
+      conditions.push(or(
+        and(isNotNull(leads.phone), ne(leads.phone, '')),
+        and(isNotNull(leads.email), ne(leads.email, ''))
+      ));
+    } else if (contact === 'missing_all') {
+      conditions.push(and(
+        or(isNull(leads.phone), eq(leads.phone, '')),
+        or(isNull(leads.email), eq(leads.email, ''))
+      ));
+    }
+
+    // Website Presence Filter
+    const web = query.websiteFilter || query.hasWebsite;
+    if (web === 'has_website' || web === 'true') {
+      conditions.push(and(isNotNull(leads.website), ne(leads.website, '')));
+    } else if (web === 'no_website' || web === 'false') {
+      conditions.push(or(isNull(leads.website), eq(leads.website, '')));
+    } else if (web === 'verified') {
+      conditions.push(eq(leads.websiteStatus, 'verified'));
+    } else if (web === 'not_detected') {
+      conditions.push(eq(leads.websiteStatus, 'not_detected'));
+    } else if (web === 'unreachable') {
+      conditions.push(eq(leads.websiteStatus, 'unreachable'));
+    } else if (web === 'social_profile') {
+      conditions.push(eq(leads.websiteStatus, 'social_profile'));
+    }
+
+    if (query.websiteStatus && query.websiteStatus !== 'all' && query.websiteStatus !== 'ALL') {
+      conditions.push(eq(leads.websiteStatus, String(query.websiteStatus)));
+    }
+
+    // Opportunity Score Filter
+    const oppRange = query.oppScoreRange || query.opportunityFilter;
+    if (oppRange === 'high') {
+      conditions.push(gte(leads.opportunityScore, 60));
+    } else if (oppRange === 'medium') {
+      conditions.push(and(gte(leads.opportunityScore, 30), lt(leads.opportunityScore, 60)));
+    } else if (oppRange === 'low') {
+      conditions.push(lt(leads.opportunityScore, 30));
+    }
+
+    if (query.minOppScore) conditions.push(gte(leads.opportunityScore, parseInt(query.minOppScore)));
+    if (query.maxOppScore) conditions.push(lte(leads.opportunityScore, parseInt(query.maxOppScore)));
+
+    // Audit Score Filter
+    const auditFilter = query.auditFilter;
+    if (auditFilter === 'audited') {
+      conditions.push(isNotNull(leads.auditScore));
+    } else if (auditFilter === 'not_audited') {
+      conditions.push(isNull(leads.auditScore));
+    } else if (auditFilter === 'good') {
+      conditions.push(gte(leads.auditScore, 70));
+    } else if (auditFilter === 'needs_work') {
+      conditions.push(and(isNotNull(leads.auditScore), lt(leads.auditScore, 70)));
+    }
+
+    if (query.minAuditScore) conditions.push(gte(leads.auditScore, parseInt(query.minAuditScore)));
+    if (query.maxAuditScore) conditions.push(lte(leads.auditScore, parseInt(query.maxAuditScore)));
+
+    // Data Confidence Filter
+    if (query.confidence && query.confidence !== 'ALL' && query.confidence !== 'all') {
+      conditions.push(eq(leads.dataConfidence, String(query.confidence).toUpperCase()));
+    }
+
+    return conditions;
+  }
+
+  // Dynamic Filter Options endpoint (Cities, Categories, Statuses, and Totals)
+  app.get('/api/leads/filter-options', async (req: AuthRequest, res) => {
+    try {
+      if (!req.user?.uid) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+      const distinctCities = await db.select({
+        city: leads.city,
+        count: sql<number>`count(*)`
+      })
+      .from(leads)
+      .where(and(isNull(leads.deletedAt), isNotNull(leads.city), ne(leads.city, '')))
+      .groupBy(leads.city)
+      .orderBy(desc(sql`count(*)`))
+      .limit(60);
+
+      const distinctCategories = await db.select({
+        category: leads.category,
+        count: sql<number>`count(*)`
+      })
+      .from(leads)
+      .where(and(isNull(leads.deletedAt), isNotNull(leads.category), ne(leads.category, '')))
+      .groupBy(leads.category)
+      .orderBy(desc(sql`count(*)`))
+      .limit(60);
+
+      const statusCounts = await db.select({
+        status: leads.leadStatus,
+        count: sql<number>`count(*)`
+      })
+      .from(leads)
+      .where(isNull(leads.deletedAt))
+      .groupBy(leads.leadStatus);
+
+      const summaryRes = await db.select({
+        total: sql<number>`count(*)`,
+        withPhone: sql<number>`count(*) filter (where phone is not null and phone != '')`,
+        withEmail: sql<number>`count(*) filter (where email is not null and email != '')`,
+        withWebsite: sql<number>`count(*) filter (where website is not null and website != '')`,
+        noWebsite: sql<number>`count(*) filter (where website is null or website = '')`,
+        highOpportunity: sql<number>`count(*) filter (where opportunity_score >= 60)`
+      })
+      .from(leads)
+      .where(isNull(leads.deletedAt));
+
+      res.json({
+        success: true,
+        data: {
+          cities: distinctCities.filter(c => Boolean(c.city)),
+          categories: distinctCategories.filter(c => Boolean(c.category)),
+          statusCounts,
+          summary: summaryRes[0] || {}
+        }
+      });
+    } catch (error: any) {
+      console.error('[API-FILTER-OPTIONS] Error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Leads with Multi-criteria Filtering, Sorting, Pagination
   app.get('/api/leads', async (req: AuthRequest, res) => {
     try {
       if (!req.user?.uid) return res.status(401).json({ success: false, error: 'Unauthorized' });
       const user = await getOrCreateUser(req.user.uid, req.user.email!);
       const { 
-        status, country, city, category, 
-        minOppScore, maxOppScore, 
-        sortBy = 'createdAt', sortOrder = 'desc',
-        page = '1', limit = '50',
-        search,
-        hasWebsite,
-        scope = 'team'
+        sortBy = 'createdAt', 
+        sortOrder = 'desc',
+        page = '1', 
+        limit = '50'
       } = req.query;
 
-      const conditions: any[] = [
-        isNull(leads.deletedAt)
-      ];
+      const conditions = buildLeadConditions(req.query, user.id);
 
-      if (scope === 'personal') {
-        conditions.push(eq(campaigns.userId, user.id));
-      }
+      // Total count matching the filters
+      const totalCountRes = await db.select({ count: sql<number>`count(*)` })
+        .from(leads)
+        .leftJoin(campaigns, eq(leads.campaignId, campaigns.id))
+        .where(and(...conditions));
+      const total = Number(totalCountRes[0]?.count || 0);
 
-      if (status) conditions.push(eq(leads.leadStatus, status as any));
-      if (country) conditions.push(eq(leads.country, country as string));
-      if (city) conditions.push(eq(leads.city, city as string));
-      if (category) conditions.push(eq(leads.category, category as string));
-      if (minOppScore) conditions.push(gt(leads.opportunityScore, parseInt(minOppScore as string)));
-      if (maxOppScore) conditions.push(lt(leads.opportunityScore, parseInt(maxOppScore as string)));
-      
-      if (hasWebsite === 'true') {
-        conditions.push(and(isNotNull(leads.website), ne(leads.website, '')) as any);
-      } else if (hasWebsite === 'false') {
-        conditions.push(or(isNull(leads.website), eq(leads.website, '')) as any);
-      }
+      // Pagination
+      const pageNum = Math.max(1, parseInt(page as string) || 1);
+      const limitNum = Math.min(500, Math.max(1, parseInt(limit as string) || 50));
+      const offset = (pageNum - 1) * limitNum;
 
-      if (search) {
-        conditions.push(or(
-          ilike(leads.companyName, `%${search}%`),
-          ilike(leads.website || '', `%${search}%`),
-          ilike(leads.email || '', `%${search}%`)
-        ) as any);
-      }
-
-      const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+      // Safe sorting column
+      const validSortColumns: Record<string, any> = {
+        createdAt: leads.createdAt,
+        opportunityScore: leads.opportunityScore,
+        auditScore: leads.auditScore,
+        companyName: leads.companyName,
+        city: leads.city,
+        category: leads.category,
+        leadStatus: leads.leadStatus
+      };
+      const sortColumn = validSortColumns[sortBy as string] || leads.createdAt;
+      const orderDirective = sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn);
 
       const results = await db.select()
         .from(leads)
-        .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
-        .where(and(...(conditions as any[])))
-        .orderBy(sortOrder === 'desc' ? desc((leads as any)[sortBy as string]) : (leads as any)[sortBy as string])
-        .limit(parseInt(limit as string))
+        .leftJoin(campaigns, eq(leads.campaignId, campaigns.id))
+        .where(and(...conditions))
+        .orderBy(orderDirective)
+        .limit(limitNum)
         .offset(offset);
       
-      res.json({ success: true, data: results.map((l: any) => l.leads) });
+      res.json({ 
+        success: true, 
+        data: results.map((l: any) => l.leads),
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1
+      });
 
     } catch (error: any) {
       console.error('[API-LEADS] Fetch failure:', error);
@@ -478,24 +702,72 @@ export function createServerApp() {
   app.get('/api/leads/export', async (req: AuthRequest, res) => {
     try {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
-      const { scope = 'team' } = req.query;
-      const whereConditions: any[] = [isNull(leads.deletedAt)];
-      if (scope === 'personal') {
-        whereConditions.push(eq(campaigns.userId, user.id));
-      }
+      const conditions = buildLeadConditions(req.query, user.id);
 
       const userLeads = await db.select()
         .from(leads)
-        .innerJoin(campaigns, eq(leads.campaignId, campaigns.id))
-        .where(and(...whereConditions));
+        .leftJoin(campaigns, eq(leads.campaignId, campaigns.id))
+        .where(and(...conditions))
+        .orderBy(desc(leads.createdAt));
       
       const flatLeads = userLeads.map((l: any) => l.leads);
 
-      const csv = Papa.unparse(flatLeads);
+      const frenchExport = flatLeads.map((l: any) => ({
+        'Entreprise': l.companyName || '',
+        'Activité / Métier': l.category || '',
+        'Ville': l.city || '',
+        'Adresse': l.address || '',
+        'Pays': l.country || 'France',
+        'Téléphone': l.phone || '',
+        'Email': l.email || '',
+        'Site Web': l.website || '',
+        'Statut du Site': l.websiteStatus === 'verified' ? 'Vérifié' : l.websiteStatus === 'not_detected' ? 'Non détecté' : l.websiteStatus === 'unreachable' ? 'Inaccessible' : 'Inconnu',
+        'Fiabilité Données': l.dataConfidence || 'MOYENNE',
+        'Score Opportunité': l.opportunityScore ?? 0,
+        'Score Audit': l.auditScore ?? '—',
+        'Statut Prospection': l.leadStatus || 'NOUVEAU',
+        'Notes & Mentions': l.notes || '',
+        'Date Découverte': l.createdAt ? new Date(l.createdAt).toLocaleDateString('fr-FR') : ''
+      }));
+
+      const csv = Papa.unparse(frenchExport);
       
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename=leads-export.csv');
-      res.send(csv);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="prospects-leadforge-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send('\uFEFF' + csv); // Add UTF-8 BOM so Excel opens French accents perfectly!
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Data Quality Cleanup & Deduplication
+  app.post('/api/leads/clean-database', async (req: AuthRequest, res) => {
+    try {
+      const allLeads = await db.select().from(leads).where(isNull(leads.deletedAt));
+      const { NormalizationService } = await import('./services/leadService.ts');
+      let updatedCount = 0;
+
+      for (const lead of allLeads) {
+        const formattedPhone = NormalizationService.formatDisplayPhone(lead.phone, lead.country);
+        const quality = NormalizationService.computeDataQuality({
+          phone: formattedPhone || lead.phone,
+          website: lead.website,
+          email: lead.email,
+          address: lead.address,
+          notes: lead.notes
+        });
+
+        if (formattedPhone !== lead.phone || lead.dataConfidence !== quality.confidence || lead.opportunityScore !== quality.score) {
+          await db.update(leads).set({
+            phone: formattedPhone || lead.phone,
+            dataConfidence: quality.confidence,
+            opportunityScore: quality.score
+          }).where(eq(leads.id, lead.id));
+          updatedCount++;
+        }
+      }
+
+      res.json({ success: true, message: `${updatedCount} prospects normalisés et qualifiés avec succès.`, totalScanned: allLeads.length });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
     }

@@ -5,11 +5,16 @@ import { OSMCategoryMapper } from './osmCategoryMapper.ts';
 import { ChainFilter } from './chainFilter.ts';
 import { ValidationService } from '../leadService.ts';
 
+// Fast in-memory query cache with 1-hour TTL
+const queryCache = new Map<string, { leads: RawLead[]; timestamp: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000;
+
 export class OSMSource implements LeadSource {
   private overpassUrls = [
     'https://lz4.overpass-api.de/api/interpreter',
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter'
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ];
 
   async search(criteria: { 
@@ -28,6 +33,13 @@ export class OSMSource implements LeadSource {
     const category = criteria.category ? criteria.category.trim() : undefined;
     const { limit = 50, bbox } = criteria;
     
+    // Check Cache
+    const cacheKey = `${(category || '').toLowerCase()}:${(city || '').toLowerCase()}:${(country || '').toLowerCase()}:${bbox ? `${bbox.minLat.toFixed(3)},${bbox.minLon.toFixed(3)}` : ''}:${criteria.localOnly}:${criteria.requireContactInfo}`;
+    const cached = queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return cached.leads.slice(0, limit);
+    }
+
     let activeBbox = bbox;
     if (!activeBbox && (city || country)) {
       try {
@@ -67,7 +79,7 @@ export class OSMSource implements LeadSource {
     });
 
     const query = `
-      [out:json][timeout:25]${bboxDecl};
+      [out:json][timeout:15]${bboxDecl};
       ${activeBbox ? '' : areaPart}
       (
         ${finalQueryParts.join('\n        ')}
@@ -86,10 +98,10 @@ export class OSMSource implements LeadSource {
           response = await axios.post(endpoint, 'data=' + encodeURIComponent(query), {
             headers: { 
               'Content-Type': 'application/x-www-form-urlencoded',
-              'User-Agent': 'LeadForge-Discovery/2.0',
+              'User-Agent': 'LeadForge-Discovery/2.5',
               'Referer': 'https://leadforge.app/'
             },
-            timeout: 18000
+            timeout: 11000
           });
           
           if (response?.data?.elements) {
@@ -113,7 +125,8 @@ export class OSMSource implements LeadSource {
             isTimeout
           }, 'OSM_API');
 
-          await new Promise(resolve => setTimeout(resolve, 800));
+          // Rapid failover
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
 
@@ -135,7 +148,7 @@ export class OSMSource implements LeadSource {
           continue;
         }
 
-        // Filter out mega-chains, famous franchises, and multinational brands (e.g. Fnac, Zara, McDonald's)
+        // Filter out mega-chains, famous franchises, and multinational brands
         if (criteria.localOnly !== false && ChainFilter.isChainOrMajorBrand(tags, tags.name)) {
           chainsExcludedCount++;
           continue;
@@ -165,13 +178,11 @@ export class OSMSource implements LeadSource {
         const email = tags.email || tags['contact:email'] || tags['email:contact'];
         const openingHours = tags.opening_hours || tags['contact:opening_hours'];
 
-        // Enforce verified contact details: if requireContactInfo is set, or if unverified (no phone, no website, no email, no valid address)
         const hasDirectContact = Boolean(phone || website || email);
         if (criteria.requireContactInfo !== false && !hasDirectContact) {
           continue;
         }
 
-        // If even standard discovery, require at least direct contact or a precise street address
         if (!hasDirectContact && (!address || address.length < 5)) {
           continue;
         }
@@ -213,15 +224,20 @@ export class OSMSource implements LeadSource {
         }
       }
 
+      // Save to Cache
+      queryCache.set(cacheKey, { leads: results, timestamp: Date.now() });
+
       await logger.info('OSM', `OSM Search returned ${results.length} leads`, { criteria, count: results.length }, 'OSM_API');
       return results;
     } catch (error: any) {
       await logger.error('OSM', 'OSM Search failed completely', error, { criteria }, 'OSM_API');
       
-      // Attempt emergency Nominatim fallback even if Overpass threw error
+      // Attempt emergency Nominatim fallback
       if ((criteria.city || criteria.country) && criteria.category) {
         try {
-          return await this.searchNominatim(criteria.category, criteria.city, criteria.country, criteria.limit || 50);
+          const fallbackResults = await this.searchNominatim(criteria.category, criteria.city, criteria.country, criteria.limit || 50);
+          queryCache.set(cacheKey, { leads: fallbackResults, timestamp: Date.now() });
+          return fallbackResults;
         } catch {}
       }
 
@@ -246,8 +262,8 @@ export class OSMSource implements LeadSource {
       if (leads.length >= limit) break;
       try {
         const res = await axios.get(q, {
-          headers: { 'User-Agent': 'LeadForge-Discovery/2.0' },
-          timeout: 8000
+          headers: { 'User-Agent': 'LeadForge-Discovery/2.5' },
+          timeout: 6000
         });
 
         if (Array.isArray(res.data)) {

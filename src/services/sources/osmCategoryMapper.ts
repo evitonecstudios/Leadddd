@@ -80,10 +80,11 @@ export class OSMCategoryMapper {
         { key: 'shop', value: 'beauty' }
       ]
     },
-    'law firm': {
+    'lawyer': {
       tags: [
         { key: 'office', value: 'lawyer' },
-        { key: 'office', value: 'legal' }
+        { key: 'office', value: 'legal' },
+        { key: 'amenity', value: 'lawyer' }
       ]
     },
     'real estate agency': {
@@ -125,7 +126,8 @@ export class OSMCategoryMapper {
     'cafe': {
       tags: [
         { key: 'amenity', value: 'cafe' },
-        { key: 'amenity', value: 'coffee_shop' }
+        { key: 'amenity', value: 'coffee_shop' },
+        { key: 'amenity', value: 'bar' }
       ]
     },
     'pharmacy': {
@@ -207,13 +209,6 @@ export class OSMCategoryMapper {
         { key: 'shop', value: 'cosmetics' }
       ]
     },
-    'lawyer': {
-      tags: [
-        { key: 'office', value: 'lawyer' },
-        { key: 'office', value: 'legal' },
-        { key: 'amenity', value: 'lawyer' }
-      ]
-    },
     'carpenter': {
       tags: [
         { key: 'craft', value: 'carpenter' },
@@ -267,6 +262,40 @@ export class OSMCategoryMapper {
         { key: 'healthcare', value: 'doctor' },
         { key: 'amenity', value: 'clinic' }
       ]
+    },
+    'driving school': {
+      tags: [
+        { key: 'amenity', value: 'driving_school' }
+      ]
+    },
+    'shoemaker': {
+      tags: [
+        { key: 'shop', value: 'shoemaker' },
+        { key: 'craft', value: 'shoemaker' }
+      ]
+    },
+    'jewelry': {
+      tags: [
+        { key: 'shop', value: 'jewelry' },
+        { key: 'shop', value: 'watches' }
+      ]
+    },
+    'bookstore': {
+      tags: [
+        { key: 'shop', value: 'books' },
+        { key: 'shop', value: 'stationery' }
+      ]
+    },
+    'cheese': {
+      tags: [
+        { key: 'shop', value: 'cheese' },
+        { key: 'shop', value: 'dairy' }
+      ]
+    },
+    'fishmonger': {
+      tags: [
+        { key: 'shop', value: 'seafood' }
+      ]
     }
   };
 
@@ -290,26 +319,32 @@ export class OSMCategoryMapper {
     if (normalized.includes('mecanic') || normalized.includes('garag') || normalized.includes('auto') || normalized.includes('carrosser') || normalized.includes('pneu') || normalized.includes('vidange') || normalized.includes('controle tech') || normalized.includes('depannage auto')) {
       return this.mapping['car mechanic'];
     }
-    if (normalized.includes('plomb') || normalized.includes('chauffag') || normalized.includes('sanitair')) {
+    if (normalized.includes('plomb') || normalized.includes('sanitair') || normalized.includes('tuyauterie')) {
       return this.mapping['plumber'];
     }
-    if (normalized.includes('avocat') || normalized.includes('notair') || normalized.includes('juridiq') || normalized.includes('lawyer') || normalized.includes('legal')) {
+    if (normalized.includes('chauffag') || normalized.includes('climat') || normalized.includes('pompe a chaleur') || normalized.includes('hvac')) {
+      return this.mapping['heating company'];
+    }
+    if (normalized.includes('avocat') || normalized.includes('notair') || normalized.includes('juridiq') || normalized.includes('lawyer') || normalized.includes('legal') || normalized.includes('huissier')) {
       return this.mapping['lawyer'];
     }
     if (normalized.includes('dentist') || normalized.includes('dentair') || normalized.includes('orthodont')) {
       return this.mapping['dentist'];
     }
-    if (normalized.includes('medecin') || normalized.includes('docteur') || normalized.includes('medical') || normalized.includes('cliniq') || normalized.includes('doctor')) {
+    if (normalized.includes('medecin') || normalized.includes('docteur') || normalized.includes('medical') || normalized.includes('cliniq') || normalized.includes('kine') || normalized.includes('osteopath') || normalized.includes('doctor')) {
       return this.mapping['doctor'];
     }
     if (normalized.includes('coiff') || normalized.includes('barbi') || normalized.includes('barber') || normalized.includes('hair')) {
       return this.mapping['hairdresser'];
     }
-    if (normalized.includes('boulang') || normalized.includes('patiss') || normalized.includes('baker') || normalized.includes('pastry')) {
+    if (normalized.includes('boulang') || normalized.includes('patiss') || normalized.includes('viennoiserie') || normalized.includes('baker') || normalized.includes('pastry')) {
       return this.mapping['bakery'];
     }
-    if (normalized.includes('restau') || normalized.includes('brasser') || normalized.includes('pizz') || normalized.includes('bistro') || normalized.includes('creper') || normalized.includes('traiteur')) {
+    if (normalized.includes('restau') || normalized.includes('brasser') || normalized.includes('pizz') || normalized.includes('bistro') || normalized.includes('creper') || normalized.includes('traiteur') || normalized.includes('burger') || normalized.includes('sushi')) {
       return this.mapping['restaurant'];
+    }
+    if (normalized.includes('cafe') || normalized.includes('bar') || normalized.includes('salon de the') || normalized.includes('pub') || normalized.includes('coffee')) {
+      return this.mapping['cafe'];
     }
     if (normalized.includes('pharmac') || normalized.includes('parapharmac') || normalized.includes('chemist')) {
       return this.mapping['pharmacy'];
@@ -317,19 +352,25 @@ export class OSMCategoryMapper {
     if (normalized.includes('electri')) {
       return this.mapping['electrician'];
     }
-    if (normalized.includes('immobili') || normalized.includes('real estate') || normalized.includes('agence immo')) {
+    if (normalized.includes('immobili') || normalized.includes('real estate') || normalized.includes('agence immo') || normalized.includes('syndic')) {
       return this.mapping['real estate agency'];
     }
-    if (normalized.includes('architect')) {
+    if (normalized.includes('architect') || normalized.includes('geometre') || normalized.includes('urbaniste')) {
       return this.mapping['architect'];
     }
-    if (normalized.includes('menuis') || normalized.includes('charpent') || normalized.includes('carpent')) {
+    if (normalized.includes('menuis') || normalized.includes('charpent') || normalized.includes('carpent') || normalized.includes('ebenist')) {
       return this.mapping['carpenter'];
     }
-    if (normalized.includes('peint') || normalized.includes('paint')) {
+    if (normalized.includes('peint') || normalized.includes('paint') || normalized.includes('platr') || normalized.includes('plaquist')) {
       return this.mapping['painter'];
     }
-    if (normalized.includes('informatiq') || normalized.includes('ordinateur') || normalized.includes('logiciel') || normalized.includes('software') || normalized.includes('web')) {
+    if (normalized.includes('couvr') || normalized.includes('toitur') || normalized.includes('zinguerie') || normalized.includes('roofer')) {
+      return this.mapping['roofing'];
+    }
+    if (normalized.includes('jardin') || normalized.includes('paysag') || normalized.includes('elag') || normalized.includes('espaces verts')) {
+      return this.mapping['landscaping'];
+    }
+    if (normalized.includes('informatiq') || normalized.includes('ordinateur') || normalized.includes('logiciel') || normalized.includes('software') || normalized.includes('web') || normalized.includes('agence digitale')) {
       return this.mapping['it services'];
     }
     if (normalized.includes('telephon') || normalized.includes('phone') || normalized.includes('smartphone') || normalized.includes('mobile') || normalized.includes('reparation')) {
@@ -338,38 +379,59 @@ export class OSMCategoryMapper {
     if (normalized.includes('veterin')) {
       return this.mapping['veterinarian'];
     }
-    if (normalized.includes('fleur') || normalized.includes('florist')) {
+    if (normalized.includes('fleur') || normalized.includes('florist') || normalized.includes('horticulteur')) {
       return this.mapping['florist'];
     }
-    if (normalized.includes('optic') || normalized.includes('lunett')) {
+    if (normalized.includes('optic') || normalized.includes('lunett') || normalized.includes('lentille')) {
       return this.mapping['optician'];
     }
-    if (normalized.includes('comptab') || normalized.includes('account')) {
+    if (normalized.includes('comptab') || normalized.includes('account') || normalized.includes('fiscal') || normalized.includes('audit')) {
       return this.mapping['accountant'];
     }
-    if (normalized.includes('serrur') || normalized.includes('locksmith')) {
+    if (normalized.includes('serrur') || normalized.includes('locksmith') || normalized.includes('vitrier') || normalized.includes('metallerie')) {
       return this.mapping['locksmith'];
     }
     if (normalized.includes('press') || normalized.includes('blanchiss') || normalized.includes('laver') || normalized.includes('laundry')) {
       return this.mapping['dry cleaning'];
     }
-    if (normalized.includes('hotel') || normalized.includes('heberg') || normalized.includes('gite') || normalized.includes('auberge')) {
+    if (normalized.includes('hotel') || normalized.includes('heberg') || normalized.includes('gite') || normalized.includes('auberge') || normalized.includes('chambre d hote')) {
       return this.mapping['hotel'];
     }
-    if (normalized.includes('sport') || normalized.includes('fitness') || normalized.includes('muscu') || normalized.includes('gym')) {
+    if (normalized.includes('sport') || normalized.includes('fitness') || normalized.includes('muscu') || normalized.includes('gym') || normalized.includes('yoga') || normalized.includes('pilates')) {
       return this.mapping['gym'];
     }
-    if (normalized.includes('beaut') || normalized.includes('esthetiq') || normalized.includes('ongl') || normalized.includes('spa')) {
+    if (normalized.includes('beaut') || normalized.includes('esthetiq') || normalized.includes('ongl') || normalized.includes('spa') || normalized.includes('massage')) {
       return this.mapping['beauty salon'];
     }
     if (normalized.includes('bouch') || normalized.includes('charcut') || normalized.includes('butcher')) {
       return this.mapping['butcher'];
     }
-    if (normalized.includes('epic') || normalized.includes('superm') || normalized.includes('aliment') || normalized.includes('grocer')) {
+    if (normalized.includes('poisson') || normalized.includes('maree') || normalized.includes('fruits de mer')) {
+      return this.mapping['fishmonger'];
+    }
+    if (normalized.includes('fromag') || normalized.includes('cremerie')) {
+      return this.mapping['cheese'];
+    }
+    if (normalized.includes('epic') || normalized.includes('superm') || normalized.includes('aliment') || normalized.includes('primeur') || normalized.includes('grocer')) {
       return this.mapping['grocery'];
     }
-    if (normalized.includes('nettoy') || normalized.includes('clean')) {
+    if (normalized.includes('nettoy') || normalized.includes('proprete') || normalized.includes('clean')) {
       return this.mapping['cleaning service'];
+    }
+    if (normalized.includes('auto ecole') || normalized.includes('permis') || normalized.includes('conduite')) {
+      return this.mapping['driving school'];
+    }
+    if (normalized.includes('cordonn') || normalized.includes('cle minute')) {
+      return this.mapping['shoemaker'];
+    }
+    if (normalized.includes('bijou') || normalized.includes('horlog')) {
+      return this.mapping['jewelry'];
+    }
+    if (normalized.includes('librair') || normalized.includes('papeterie')) {
+      return this.mapping['bookstore'];
+    }
+    if (normalized.includes('vetement') || normalized.includes('boutique') || normalized.includes('mode') || normalized.includes('pret a porter')) {
+      return this.mapping['boutique'];
     }
 
     // Partial key matching against registered keys
@@ -397,7 +459,6 @@ export class OSMCategoryMapper {
     
     for (const tag of mapping.tags) {
       if (tag.value === '*') {
-        // Matches any value for this tag, but must have a name
         parts.push(`node["${tag.key}"][name];`);
         parts.push(`way["${tag.key}"][name];`);
       } else {

@@ -61,6 +61,20 @@ export class ChainFilter {
     // Frozen Food & Specialty Chain Retail
     'picard', 'naturalia', 'biocoop', 'bio c\' bon', 'bio c bon', 'la vie claire',
 
+    // Bakery Chains
+    'marie blachere', 'marie blachère', 'boulangerie ange', 'ange', 'la mie caline', 'la mie câline',
+    'feuillette', 'boulangerie feuillette', 'louise', 'boulangerie louise',
+
+    // Fitness & Gym Chains
+    'basic fit', 'basic-fit', 'fitness park', 'keep cool', 'neoness', 'on air fitness',
+    'l\'orange bleue', 'orange bleue', 'magic form',
+
+    // Hair Salon Chains
+    'franck provost', 'jean louis david', 'saint algue', 'shampoo expert', 'coiff&co', 'tchip', 'tchip coiffure', 'camille albane',
+
+    // Healthcare & Pharmacy Franchises
+    'pharmacie lafayette', 'optique lafayette', 'dentego', 'point vision', 'vertuo',
+
     // Hotel & Hospitality Chains
     'ibis', 'ibis budget', 'ibis styles', 'novotel', 'mercure', 'sofitel', 'marriott',
     'hilton', 'best western', 'b&b hotels', 'premiere classe', 'première classe',
