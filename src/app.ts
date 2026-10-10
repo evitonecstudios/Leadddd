@@ -326,6 +326,28 @@ export function createServerApp() {
       conditions.push(eq(leads.dataConfidence, String(query.confidence).toUpperCase()));
     }
 
+    // High Commercial Intent Filter
+    const intentFilter = query.intentFilter;
+    if (intentFilter === 'high_intent') {
+      conditions.push(gte(leads.opportunityScore, 65));
+    } else if (intentFilter === 'no_website') {
+      conditions.push(or(
+        isNull(leads.website), 
+        eq(leads.website, ''), 
+        eq(leads.websiteStatus, 'social_profile'), 
+        eq(leads.websiteStatus, 'not_detected')
+      ));
+    } else if (intentFilter === 'call_ready') {
+      conditions.push(and(
+        isNotNull(leads.phone), 
+        ne(leads.phone, ''), 
+        gte(leads.opportunityScore, 45)
+      ));
+    } else if (intentFilter === 'high_ticket') {
+      const highKeywords = ['dentist', 'dentaire', 'plombier', 'plumber', 'electricien', 'electrician', 'avocat', 'lawyer', 'architect', 'notaire', 'mecanic', 'garage', 'restaurant', 'chauffagiste', 'hvac'];
+      conditions.push(or(...highKeywords.map(k => ilike(leads.category, `%${k}%`))));
+    }
+
     return conditions;
   }
 

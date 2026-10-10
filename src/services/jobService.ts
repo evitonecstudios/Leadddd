@@ -151,6 +151,24 @@ export class JobService {
               const chunkPromises = chunk.map(async (rawLead) => {
                 if (totalSaved >= targetCount) return null;
 
+                // High-Intent Targeting Filter: No Official Website
+                if (criteria.intentMode === 'NO_WEBSITE' || criteria.targetNoWebsite) {
+                  const hasOfficialWeb = rawLead.website && 
+                    !rawLead.website.includes('facebook.com') && 
+                    !rawLead.website.includes('instagram.com') && 
+                    !rawLead.website.includes('linkedin.com');
+                  if (hasOfficialWeb) {
+                    return null; // Skip businesses that already have custom websites
+                  }
+                }
+
+                // High-Intent Targeting Filter: Direct Callable Phone Required
+                if (criteria.intentMode === 'DIRECT_CALL' || criteria.requireDirectPhone) {
+                  if (!rawLead.phone || rawLead.phone.trim().length < 6) {
+                    return null; // Skip businesses without direct callable phone
+                  }
+                }
+
                 const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
                   requireVerifiedContact: criteria.requireContactInfo !== false
                 });
@@ -210,6 +228,19 @@ export class JobService {
 
             await Promise.allSettled(chunk.map(async (rawLead: any) => {
               if (totalSaved >= targetCount) return;
+
+              // High-Intent Targeting Filter
+              if (criteria.intentMode === 'NO_WEBSITE' || criteria.targetNoWebsite) {
+                const hasOfficialWeb = rawLead.website && 
+                  !rawLead.website.includes('facebook.com') && 
+                  !rawLead.website.includes('instagram.com') && 
+                  !rawLead.website.includes('linkedin.com');
+                if (hasOfficialWeb) return;
+              }
+              if (criteria.intentMode === 'DIRECT_CALL' || criteria.requireDirectPhone) {
+                if (!rawLead.phone || rawLead.phone.trim().length < 6) return;
+              }
+
               const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
                 requireVerifiedContact: criteria.requireContactInfo !== false
               });

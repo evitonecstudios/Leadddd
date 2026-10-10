@@ -915,7 +915,8 @@ function GenerateView({ token }: any) {
     radius: 10,
     campaignName: 'Prospection Artisans & Commerces Paris',
     localOnly: true,
-    requireContactInfo: true
+    requireContactInfo: true,
+    intentMode: 'NO_WEBSITE' as 'ALL' | 'NO_WEBSITE' | 'HIGH_VALUE' | 'DIRECT_CALL'
   });
 
   const targetPresets = [25, 50, 100, 250, 500];
@@ -972,7 +973,8 @@ function GenerateView({ token }: any) {
         category: criteria.category,
         limit: criteria.maxResults,
         localOnly: criteria.localOnly,
-        requireContactInfo: criteria.requireContactInfo
+        requireContactInfo: criteria.requireContactInfo,
+        intentMode: criteria.intentMode
       },
       campaignName: criteria.campaignName
     }, token!);
@@ -1137,6 +1139,89 @@ function GenerateView({ token }: any) {
                       )}
                     >
                       {cat.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* High Commercial Intent Targeting */}
+              <div className="space-y-3 col-span-2 p-5 bg-gradient-to-br from-indigo-50/80 via-blue-50/40 to-slate-50 border border-indigo-100/80 rounded-2xl shadow-2xs">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <h4 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                        Ciblage Haute Intention & Détection de Besoin Client
+                      </h4>
+                      <span className="text-[10px] font-extrabold bg-indigo-600 text-white px-2 py-0.5 rounded uppercase shadow-2xs">
+                        Algorithme B2B
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
+                      Garantit que les prospects générés ont un <strong>besoin direct et avéré de vos services</strong> (création de site vitrine, référencement SEO, réservation en ligne, bouton WhatsApp).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+                  {[
+                    {
+                      id: 'NO_WEBSITE',
+                      badge: '🚀 Priorité N°1',
+                      title: 'Pépites Sans Site Web',
+                      desc: 'Commerces & artisans actifs avec tél/adresse, mais 0 site internet ou profil réseaux sociaux uniquement. Cible numéro 1 pour vendre un site vitrine.',
+                      bgActive: 'bg-amber-600 text-white border-amber-600 shadow-sm',
+                      bgInactive: 'bg-white hover:border-amber-300 text-slate-700 border-slate-200'
+                    },
+                    {
+                      id: 'HIGH_VALUE',
+                      badge: '💎 Gros Panier',
+                      title: 'Secteurs à Fort Budget',
+                      desc: 'Artisans du bâtiment, santé/dentaire, cabinets juridiques, architectes. Le ROI d’un nouveau site est immédiat dès le premier client.',
+                      bgActive: 'bg-indigo-600 text-white border-indigo-600 shadow-sm',
+                      bgInactive: 'bg-white hover:border-indigo-300 text-slate-700 border-slate-200'
+                    },
+                    {
+                      id: 'DIRECT_CALL',
+                      badge: '📞 Closing Rapide',
+                      title: '100% Téléphone Direct',
+                      desc: 'Exclut toutes les fiches sans numéro. Conserve uniquement les prospects immédiatement joignables par appel direct ou WhatsApp.',
+                      bgActive: 'bg-emerald-600 text-white border-emerald-600 shadow-sm',
+                      bgInactive: 'bg-white hover:border-emerald-300 text-slate-700 border-slate-200'
+                    },
+                    {
+                      id: 'ALL',
+                      badge: '🌐 Exhaustif',
+                      title: 'Tous les Établissements',
+                      desc: 'Extraction globale sur toute la commune sans filtre d’intention préalable pour une vue d’ensemble du marché local.',
+                      bgActive: 'bg-slate-900 text-white border-slate-900 shadow-sm',
+                      bgInactive: 'bg-white hover:border-slate-300 text-slate-700 border-slate-200'
+                    }
+                  ].map(mode => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => {
+                        setCriteria({ 
+                          ...criteria, 
+                          intentMode: mode.id as any,
+                          category: mode.id === 'HIGH_VALUE' && !['plumber', 'dentist', 'electrician', 'lawyer', 'car mechanic'].includes(criteria.category) ? 'plumber' : criteria.category
+                        });
+                      }}
+                      className={cn(
+                        "p-3 rounded-xl border text-left transition-all space-y-1 relative cursor-pointer",
+                        criteria.intentMode === mode.id ? mode.bgActive : mode.bgInactive
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-xs tracking-tight">{mode.title}</span>
+                        <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider", criteria.intentMode === mode.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600")}>
+                          {mode.badge}
+                        </span>
+                      </div>
+                      <p className={cn("text-[10px] leading-relaxed line-clamp-2", criteria.intentMode === mode.id ? "text-white/90" : "text-slate-500")}>
+                        {mode.desc}
+                      </p>
                     </button>
                   ))}
                 </div>
@@ -1475,6 +1560,7 @@ function LeadsView({ token, onSelectLead }: any) {
   const [websiteFilter, setWebsiteFilter] = useState('all');
   const [oppScoreFilter, setOppScoreFilter] = useState('all');
   const [auditFilter, setAuditFilter] = useState('all');
+  const [intentFilter, setIntentFilter] = useState('all');
   const [scopeFilter, setScopeFilter] = useState<'team' | 'personal'>('team');
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
@@ -1528,6 +1614,7 @@ function LeadsView({ token, onSelectLead }: any) {
     if (websiteFilter && websiteFilter !== 'all') params.append('websiteFilter', websiteFilter);
     if (oppScoreFilter && oppScoreFilter !== 'all') params.append('oppScoreRange', oppScoreFilter);
     if (auditFilter && auditFilter !== 'all') params.append('auditFilter', auditFilter);
+    if (intentFilter && intentFilter !== 'all') params.append('intentFilter', intentFilter);
     params.append('scope', scopeFilter);
     params.append('sortBy', sortBy);
     params.append('sortOrder', sortOrder);
@@ -1564,6 +1651,7 @@ function LeadsView({ token, onSelectLead }: any) {
     websiteFilter,
     oppScoreFilter,
     auditFilter,
+    intentFilter,
     scopeFilter,
     sortBy,
     sortOrder,
@@ -1608,6 +1696,7 @@ function LeadsView({ token, onSelectLead }: any) {
     setWebsiteFilter('all');
     setOppScoreFilter('all');
     setAuditFilter('all');
+    setIntentFilter('all');
     setSortBy('createdAt');
     setSortOrder('desc');
     setPage(1);
@@ -1622,6 +1711,7 @@ function LeadsView({ token, onSelectLead }: any) {
     websiteFilter !== 'all' ||
     oppScoreFilter !== 'all' ||
     auditFilter !== 'all' ||
+    intentFilter !== 'all' ||
     sortBy !== 'createdAt' ||
     sortOrder !== 'desc'
   );
@@ -1647,7 +1737,7 @@ function LeadsView({ token, onSelectLead }: any) {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Filtrez avec souplesse par entreprise, ville, statut, canal de contact ou opportunité commerciale.
+            Filtrez avec souplesse par entreprise, ville, statut, canal de contact ou intention d'achat.
           </p>
         </div>
 
@@ -1709,6 +1799,23 @@ function LeadsView({ token, onSelectLead }: any) {
         >
           <span>🎯 Tous</span>
           <span className="text-[10px] opacity-70">({summary.total ?? totalLeads})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setIntentFilter(intentFilter === 'high_intent' ? 'all' : 'high_intent');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-extrabold transition-all shrink-0 flex items-center gap-1.5 border",
+            intentFilter === 'high_intent'
+              ? "bg-gradient-to-r from-blue-700 to-indigo-700 text-white border-blue-700 shadow-xs"
+              : "bg-blue-50/70 text-blue-800 border-blue-200 hover:bg-blue-100/70"
+          )}
+          title="Afficher uniquement les prospects à très haute intention (prêts à signer ou besoin immédiat)"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+          <span>🔥 Haute Intention (Prêts à Signer)</span>
         </button>
 
         <button
@@ -1951,8 +2058,19 @@ function LeadsView({ token, onSelectLead }: any) {
 
             {/* Potential & Audit Filter */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Potentiel & Audit</label>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Intention & Potentiel</label>
               <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={intentFilter}
+                  onChange={e => { setIntentFilter(e.target.value); setPage(1); }}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-medium text-slate-700 outline-none"
+                >
+                  <option value="all">Intention</option>
+                  <option value="high_intent">🔥 Haute (≥65)</option>
+                  <option value="no_website">🚀 Sans Site</option>
+                  <option value="call_ready">📞 Avec Tél</option>
+                  <option value="high_ticket">💎 Fort Panier</option>
+                </select>
                 <select
                   value={oppScoreFilter}
                   onChange={e => { setOppScoreFilter(e.target.value); setPage(1); }}
@@ -1962,17 +2080,6 @@ function LeadsView({ token, onSelectLead }: any) {
                   <option value="high">🔥 ≥ 60</option>
                   <option value="medium">⚡ 30 à 59</option>
                   <option value="low">Faible &lt;30</option>
-                </select>
-                <select
-                  value={auditFilter}
-                  onChange={e => { setAuditFilter(e.target.value); setPage(1); }}
-                  className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-medium text-slate-700 outline-none"
-                >
-                  <option value="all">Audit Tech</option>
-                  <option value="audited">Déjà Audité</option>
-                  <option value="not_audited">Non Audité</option>
-                  <option value="good">Score ≥ 70</option>
-                  <option value="needs_work">Score &lt; 70</option>
                 </select>
               </div>
             </div>
@@ -1988,6 +2095,12 @@ function LeadsView({ token, onSelectLead }: any) {
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg font-medium text-[11px]">
                   Recherche : "{debouncedSearch}"
                   <button onClick={() => setSearch('')} className="hover:text-slate-950 font-bold ml-1">×</button>
+                </span>
+              )}
+              {intentFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-gradient-to-r from-blue-700 to-indigo-700 text-white rounded-lg font-bold text-[11px] shadow-2xs">
+                  🔥 {intentFilter === 'high_intent' ? 'Haute Intention' : intentFilter === 'no_website' ? 'Sans Site' : intentFilter}
+                  <button onClick={() => setIntentFilter('all')} className="hover:text-amber-200 font-bold ml-1">×</button>
                 </span>
               )}
               {statusFilter && (
@@ -2082,7 +2195,7 @@ function LeadsView({ token, onSelectLead }: any) {
                   <th className="px-6 py-4">Entreprise & Ville</th>
                   <th className="px-6 py-4">Site Web & Détection</th>
                   <th className="px-6 py-4 text-center">Score Audit</th>
-                  <th className="px-6 py-4 text-center">Opportunité</th>
+                  <th className="px-6 py-4 text-center">Opportunité & Intention</th>
                   <th className="px-6 py-4 text-center">Contact Direct</th>
                   <th className="px-6 py-4">Statut CRM</th>
                   <th className="px-6 py-4"></th>
@@ -2151,9 +2264,20 @@ function LeadsView({ token, onSelectLead }: any) {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <span className={cn("text-xs font-black", (lead.opportunityScore || 0) >= 60 ? 'text-blue-600 font-extrabold' : 'text-slate-400')}>
-                        {lead.opportunityScore ?? 0}
-                      </span>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className={cn("text-xs font-black", (lead.opportunityScore || 0) >= 65 ? 'text-blue-600 font-extrabold' : 'text-slate-500')}>
+                          {lead.opportunityScore ?? 0}
+                        </span>
+                        {(lead.opportunityScore || 0) >= 65 ? (
+                          <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-0.5 shadow-2xs">
+                            <Sparkles className="w-2 h-2 text-blue-600" /> Haute Intention
+                          </span>
+                        ) : (!lead.website || lead.websiteStatus === 'social_profile') ? (
+                          <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 inline-flex items-center gap-0.5 shadow-2xs">
+                            🚀 Sans Site
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-1.5">
