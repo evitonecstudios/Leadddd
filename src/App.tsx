@@ -1542,6 +1542,223 @@ function ImportView({ token, onBack }: any) {
   );
 }
 
+// --- Multi-Select Filter Component for Precision Data Refinement ---
+interface MultiSelectOption {
+  value: string;
+  label: string;
+  count?: number;
+  badge?: string;
+  icon?: string;
+}
+
+interface MultiSelectFilterProps {
+  label: string;
+  placeholder: string;
+  options: MultiSelectOption[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+  className?: string;
+  buttonClassName?: string;
+  allLabel?: string;
+  searchPlaceholder?: string;
+}
+
+function MultiSelectFilter({
+  label,
+  placeholder,
+  options,
+  selectedValues,
+  onChange,
+  className = '',
+  buttonClassName = '',
+  allLabel = 'Tout sélectionner',
+  searchPlaceholder = 'Rechercher...'
+}: MultiSelectFilterProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const filteredOptions = options.filter(opt =>
+    opt.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    opt.value.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const toggleOption = (val: string) => {
+    if (selectedValues.includes(val)) {
+      onChange(selectedValues.filter(v => v !== val));
+    } else {
+      onChange([...selectedValues, val]);
+    }
+  };
+
+  const handleSelectAll = () => {
+    const allFilteredVals = filteredOptions.map(o => o.value);
+    const newSelected = Array.from(new Set([...selectedValues, ...allFilteredVals]));
+    onChange(newSelected);
+  };
+
+  const handleClear = () => {
+    onChange([]);
+  };
+
+  return (
+    <div className={cn("relative", className)} ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className={cn(
+          "w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-xs font-semibold text-slate-700 outline-none flex items-center justify-between gap-2 transition-all text-left",
+          isOpen ? "bg-white border-blue-500 ring-2 ring-blue-500/10 shadow-xs" : "border-slate-200 hover:bg-white hover:border-slate-300",
+          selectedValues.length > 0 ? "border-blue-400 bg-blue-50/40 text-blue-900 font-bold" : "",
+          buttonClassName
+        )}
+      >
+        <div className="flex items-center gap-1.5 min-w-0 truncate">
+          <span className="truncate">
+            {selectedValues.length === 0 ? (
+              <span className="text-slate-600 font-medium">{placeholder}</span>
+            ) : selectedValues.length === 1 ? (
+              <span>
+                {options.find(o => o.value === selectedValues[0])?.label || selectedValues[0]}
+              </span>
+            ) : (
+              <span>
+                {label} : <span className="text-blue-700 font-bold">{selectedValues.length} sélectionnés</span>
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {selectedValues.length > 0 && (
+            <span className="px-1.5 py-0.2 bg-blue-600 text-white rounded-full text-[10px] font-mono font-bold leading-tight">
+              {selectedValues.length}
+            </span>
+          )}
+          <ChevronDown className={cn("w-3.5 h-3.5 text-slate-400 transition-transform duration-200", isOpen && "rotate-180 text-blue-600")} />
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 top-full mt-1.5 w-72 max-w-[90vw] bg-white rounded-2xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+          {/* Header & Quick actions */}
+          <div className="px-2 py-1.5 flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              {label} ({selectedValues.length})
+            </span>
+            <div className="flex items-center gap-2 text-[11px]">
+              <button
+                type="button"
+                onClick={handleSelectAll}
+                className="text-blue-600 hover:text-blue-800 font-bold hover:underline"
+              >
+                {allLabel}
+              </button>
+              {selectedValues.length > 0 && (
+                <>
+                  <span className="text-slate-300">•</span>
+                  <button
+                    type="button"
+                    onClick={handleClear}
+                    className="text-rose-600 hover:text-rose-800 font-bold hover:underline"
+                  >
+                    Effacer
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Search box if more than 5 options */}
+          {options.length > 5 && (
+            <div className="relative mb-2">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white"
+                autoFocus
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Options list */}
+          <div className="max-h-56 overflow-y-auto space-y-0.5 pr-0.5 custom-scrollbar">
+            {filteredOptions.length === 0 ? (
+              <div className="text-center py-4 text-xs text-slate-400">
+                Aucun résultat pour "{searchTerm}"
+              </div>
+            ) : (
+              filteredOptions.map(opt => {
+                const isSelected = selectedValues.includes(opt.value);
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => toggleOption(opt.value)}
+                    className={cn(
+                      "w-full px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between text-left transition-colors font-medium",
+                      isSelected ? "bg-blue-50 text-blue-900 font-bold" : "text-slate-700 hover:bg-slate-50"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 truncate">
+                      <div
+                        className={cn(
+                          "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                          isSelected ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 bg-white"
+                        )}
+                      >
+                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                      </div>
+                      <span className="truncate">
+                        {opt.icon && <span className="mr-1">{opt.icon}</span>}
+                        {opt.label}
+                      </span>
+                    </div>
+                    {typeof opt.count === 'number' && (
+                      <span className={cn(
+                        "text-[10px] font-mono ml-2 shrink-0 px-1.5 py-0.2 rounded",
+                        isSelected ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-500"
+                      )}>
+                        {opt.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LeadsView({ token, onSelectLead }: any) {
   const [leads, setLeads] = useState<any[]>([]);
   const [totalLeads, setTotalLeads] = useState(0);
@@ -1550,12 +1767,12 @@ function LeadsView({ token, onSelectLead }: any) {
   const [pageSize, setPageSize] = useState(50);
   const [loading, setLoading] = useState(false);
 
-  // Filter States
+  // Filter States (Supporting Multi-Select for Status, City, and Category)
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [cityFilter, setCityFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [cityFilter, setCityFilter] = useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [contactFilter, setContactFilter] = useState('all');
   const [websiteFilter, setWebsiteFilter] = useState('all');
   const [oppScoreFilter, setOppScoreFilter] = useState('all');
@@ -1607,9 +1824,9 @@ function LeadsView({ token, onSelectLead }: any) {
   const getQueryParams = (forExport = false) => {
     const params = new URLSearchParams();
     if (debouncedSearch) params.append('search', debouncedSearch);
-    if (statusFilter) params.append('status', statusFilter);
-    if (cityFilter) params.append('city', cityFilter);
-    if (categoryFilter) params.append('category', categoryFilter);
+    if (statusFilter.length > 0) params.append('status', statusFilter.join(','));
+    if (cityFilter.length > 0) params.append('city', cityFilter.join(','));
+    if (categoryFilter.length > 0) params.append('category', categoryFilter.join(','));
     if (contactFilter && contactFilter !== 'all') params.append('contactFilter', contactFilter);
     if (websiteFilter && websiteFilter !== 'all') params.append('websiteFilter', websiteFilter);
     if (oppScoreFilter && oppScoreFilter !== 'all') params.append('oppScoreRange', oppScoreFilter);
@@ -1689,9 +1906,9 @@ function LeadsView({ token, onSelectLead }: any) {
   const resetAllFilters = () => {
     setSearch('');
     setDebouncedSearch('');
-    setStatusFilter('');
-    setCityFilter('');
-    setCategoryFilter('');
+    setStatusFilter([]);
+    setCityFilter([]);
+    setCategoryFilter([]);
     setContactFilter('all');
     setWebsiteFilter('all');
     setOppScoreFilter('all');
@@ -1704,9 +1921,9 @@ function LeadsView({ token, onSelectLead }: any) {
 
   const hasActiveFilters = Boolean(
     debouncedSearch ||
-    statusFilter ||
-    cityFilter ||
-    categoryFilter ||
+    statusFilter.length > 0 ||
+    cityFilter.length > 0 ||
+    categoryFilter.length > 0 ||
     contactFilter !== 'all' ||
     websiteFilter !== 'all' ||
     oppScoreFilter !== 'all' ||
@@ -1885,12 +2102,16 @@ function LeadsView({ token, onSelectLead }: any) {
 
         <button
           onClick={() => {
-            setStatusFilter(statusFilter === 'QUALIFIED' ? '' : 'QUALIFIED');
+            if (statusFilter.includes('QUALIFIED')) {
+              setStatusFilter(statusFilter.filter(s => s !== 'QUALIFIED'));
+            } else {
+              setStatusFilter([...statusFilter, 'QUALIFIED']);
+            }
             setPage(1);
           }}
           className={cn(
             "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
-            statusFilter === 'QUALIFIED'
+            statusFilter.includes('QUALIFIED')
               ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
               : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
           )}
@@ -1923,39 +2144,47 @@ function LeadsView({ token, onSelectLead }: any) {
             )}
           </div>
 
-          {/* CRM Status Dropdown */}
-          <div className="min-w-[160px]">
-            <select 
-              value={statusFilter}
-              onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider text-slate-700 outline-none focus:bg-white"
-            >
-              <option value="">Tous les statuts</option>
-              <option value="NEW">Nouveaux</option>
-              <option value="REVIEWED">Examinés</option>
-              <option value="QUALIFIED">Qualifiés</option>
-              <option value="CONTACTED">Contactés</option>
-              <option value="REPLIED">Ont Répondu</option>
-              <option value="WON">Gagnés</option>
-              <option value="LOST">Perdus</option>
-              <option value="DISMISSED">Écartés</option>
-            </select>
+          {/* Multi-Select CRM Status Dropdown */}
+          <div className="min-w-[190px]">
+            <MultiSelectFilter
+              label="Statut"
+              placeholder="Tous les statuts"
+              allLabel="Tous les statuts"
+              searchPlaceholder="Filtrer les statuts..."
+              options={[
+                { value: 'NEW', label: 'Nouveaux', icon: '🆕' },
+                { value: 'REVIEWED', label: 'Examinés', icon: '👀' },
+                { value: 'QUALIFIED', label: 'Qualifiés', icon: '✨' },
+                { value: 'CONTACTED', label: 'Contactés', icon: '📞' },
+                { value: 'REPLIED', label: 'Ont Répondu', icon: '💬' },
+                { value: 'WON', label: 'Gagnés', icon: '🏆' },
+                { value: 'LOST', label: 'Perdus', icon: '❌' },
+                { value: 'DISMISSED', label: 'Écartés', icon: '🗑️' }
+              ].map(opt => {
+                const found = filterOptions.statusCounts?.find(s => s.status === opt.value);
+                return { ...opt, count: found?.count };
+              })}
+              selectedValues={statusFilter}
+              onChange={vals => { setStatusFilter(vals); setPage(1); }}
+            />
           </div>
 
-          {/* City Quick Dropdown */}
-          <div className="min-w-[160px]">
-            <select
-              value={cityFilter}
-              onChange={e => { setCityFilter(e.target.value); setPage(1); }}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white"
-            >
-              <option value="">Toutes les villes</option>
-              {filterOptions.cities.map(c => (
-                <option key={c.city} value={c.city}>
-                  📍 {c.city} ({c.count})
-                </option>
-              ))}
-            </select>
+          {/* Multi-Select City Dropdown */}
+          <div className="min-w-[190px]">
+            <MultiSelectFilter
+              label="Ville"
+              placeholder="Toutes les villes"
+              allLabel="Toutes les villes"
+              searchPlaceholder="Rechercher une ville..."
+              options={filterOptions.cities.map(c => ({
+                value: c.city,
+                label: c.city,
+                icon: '📍',
+                count: c.count
+              }))}
+              selectedValues={cityFilter}
+              onChange={vals => { setCityFilter(vals); setPage(1); }}
+            />
           </div>
 
           {/* Sorting Dropdown */}
@@ -2006,21 +2235,24 @@ function LeadsView({ token, onSelectLead }: any) {
         {/* Expandable Advanced Filter Panel */}
         {showFiltersDrawer && (
           <div className="pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-top-1 duration-200">
-            {/* Category / Profession Filter */}
+            {/* Multi-Select Category / Profession Filter */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Activité / Métier</label>
-              <select
-                value={categoryFilter}
-                onChange={e => { setCategoryFilter(e.target.value); setPage(1); }}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
-              >
-                <option value="">Toutes les activités</option>
-                {filterOptions.categories.map(cat => (
-                  <option key={cat.category} value={cat.category}>
-                    {cat.category} ({cat.count})
-                  </option>
-                ))}
-              </select>
+              <MultiSelectFilter
+                label="Métier"
+                placeholder="Toutes les activités"
+                allLabel="Toutes les activités"
+                searchPlaceholder="Rechercher une activité..."
+                options={filterOptions.categories.map(cat => ({
+                  value: cat.category,
+                  label: cat.category,
+                  icon: '💼',
+                  count: cat.count
+                }))}
+                selectedValues={categoryFilter}
+                onChange={vals => { setCategoryFilter(vals); setPage(1); }}
+                buttonClassName="py-2 rounded-lg"
+              />
             </div>
 
             {/* Direct Contact Channels */}
@@ -2103,24 +2335,24 @@ function LeadsView({ token, onSelectLead }: any) {
                   <button onClick={() => setIntentFilter('all')} className="hover:text-amber-200 font-bold ml-1">×</button>
                 </span>
               )}
-              {statusFilter && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg font-medium text-[11px]">
-                  Statut : {statusFilter}
-                  <button onClick={() => setStatusFilter('')} className="hover:text-blue-950 font-bold ml-1">×</button>
+              {statusFilter.map(st => (
+                <span key={st} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg font-medium text-[11px]">
+                  Statut : {st}
+                  <button onClick={() => setStatusFilter(statusFilter.filter(s => s !== st))} className="hover:text-blue-950 font-bold ml-1">×</button>
                 </span>
-              )}
-              {cityFilter && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-medium text-[11px]">
-                  Ville : {cityFilter}
-                  <button onClick={() => setCityFilter('')} className="hover:text-indigo-950 font-bold ml-1">×</button>
+              ))}
+              {cityFilter.map(ct => (
+                <span key={ct} className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-medium text-[11px]">
+                  📍 {ct}
+                  <button onClick={() => setCityFilter(cityFilter.filter(c => c !== ct))} className="hover:text-indigo-950 font-bold ml-1">×</button>
                 </span>
-              )}
-              {categoryFilter && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-50 text-violet-700 rounded-lg font-medium text-[11px]">
-                  Métier : {categoryFilter}
-                  <button onClick={() => setCategoryFilter('')} className="hover:text-violet-950 font-bold ml-1">×</button>
+              ))}
+              {categoryFilter.map(cat => (
+                <span key={cat} className="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-50 text-violet-700 rounded-lg font-medium text-[11px]">
+                  💼 {cat}
+                  <button onClick={() => setCategoryFilter(categoryFilter.filter(c => c !== cat))} className="hover:text-violet-950 font-bold ml-1">×</button>
                 </span>
-              )}
+              ))}
               {contactFilter !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg font-medium text-[11px]">
                   Contact : {contactFilter}
