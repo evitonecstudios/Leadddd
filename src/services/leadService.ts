@@ -1,6 +1,8 @@
 import { db } from '../db/index.ts';
 import { leads, fieldEvidence } from '../db/schema.ts';
 import { eq, and } from 'drizzle-orm';
+import { SocialEnrichmentService } from './socialEnrichmentService.ts';
+import { ChainFilter } from './sources/chainFilter.ts';
 
 export interface DataQualityReport {
   score: number;
@@ -124,17 +126,20 @@ export class NormalizationService {
 
 export class ValidationService {
   static validateEmail(email: string): boolean {
+    if (!email) return false;
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!re.test(email)) return false;
-    const lower = email.toLowerCase();
+    if (!re.test(email.trim())) return false;
+    const lower = email.toLowerCase().trim();
     if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.webp') || lower.endsWith('.svg') || lower.endsWith('.gif')) return false;
-    if (lower.includes('sentry') || lower.includes('wixpress') || lower.includes('example.com') || lower.includes('noreply') || lower.includes('no-reply') || lower.includes('privacy')) return false;
+    if (lower.includes('sentry') || lower.includes('wixpress') || lower.includes('example.com') || lower.includes('noreply') || lower.includes('no-reply') || lower.includes('privacy') || lower.includes('mailer-daemon') || lower.includes('postmaster')) return false;
     return true;
   }
 
   static validatePhone(phone: string): boolean {
+    if (!phone) return false;
     const clean = phone.replace(/[^\d]/g, '');
-    return clean.length >= 7 && clean.length <= 15;
+    // Minimum 8 digits, maximum 15 digits
+    return clean.length >= 8 && clean.length <= 15;
   }
 
   static isInvalidBusinessName(name?: string | null): boolean {
@@ -151,7 +156,11 @@ export class ValidationService {
       'calvaire', 'statue', 'monument', 'fontaine', 'cimetiere', 'cemetery', 'test',
       'chantier', 'batiment', 'building', 'residential', 'maison', 'residence', 'immeuble',
       'arret', 'gare', 'station service', 'station essence', 'lavoir', 'eglise', 'mairie',
-      'salle des fetes', 'decheterie', 'poste de transformation'
+      'salle des fetes', 'decheterie', 'poste de transformation', 'zone artisanale', 'rond-point',
+      'taulier', 'phone store', 'magasin de téléphonie mobile', 'magasin', 'store', 'shop',
+      'boutique', 'boulangerie', 'restaurant', 'plombier', 'coiffeur', 'barbier', 'garage',
+      'epicerie', 'épicerie', 'bar', 'café', 'cafe', 'atelier', 'cabinet', 'bureau',
+      'u1 prospect', 'u2 prospect', 'pipeline test', 'audit test target', 'test persistence inc'
     ];
     if (genericBlocked.some(b => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower.startsWith(b + ' ') || lower.endsWith(' ' + b))) {
       return true;
@@ -162,19 +171,42 @@ export class ValidationService {
     return false;
   }
 
-  static isVerifiedBusiness(data: any, strictContact: boolean = false): boolean {
+  static isSocialOrDirectoryUrl(url?: string | null): boolean {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    const directoryDomains = [
+      'facebook.com', 'fb.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com',
+      'pagesjaunes.fr', 'yellowpages', 'yelp.com', 'tripadvisor', 'google.com/maps', 'maps.google',
+      'local.ch', 'search.ch', 'infobel.com', 'societe.com', 'manageo.fr', 'verif.com'
+    ];
+    return directoryDomains.some(d => lower.includes(d));
+  }
+
+  static isVerifiedBusiness(data: any): boolean {
     if (this.isInvalidBusinessName(data.companyName)) return false;
+    if (ChainFilter.isChainOrMajorBrand(data.rawData?.tags || {}, data.companyName)) return false;
 
-    const hasPhone = Boolean(data.phone && data.phone.trim().length >= 6);
-    const hasWebsite = Boolean(data.website && data.website.trim().length >= 4);
+    // Must have a real valid city and physical street address
+    if (!data.city || data.city.trim().length < 2) return false;
+    if (!data.address || data.address.trim().length < 5) return false;
+
+    const hasPhone = Boolean(data.phone && this.validatePhone(data.phone));
+    const hasWebsite = Boolean(data.website && data.website.trim().length >= 4 && !this.isSocialOrDirectoryUrl(data.website));
     const hasEmail = Boolean(data.email && this.validateEmail(data.email));
-    const hasAddress = Boolean(data.address && data.address.trim().length >= 6);
 
-    if (strictContact) {
-      return hasPhone || hasWebsite || hasEmail;
-    }
+    // Must have a verified phone number
+    if (!hasPhone) return false;
 
-    return hasPhone || hasWebsite || hasEmail || hasAddress;
+    // Must have verified website or confirmed email
+    if (!hasWebsite && !hasEmail) return false;
+
+    return true;
+  }
+
+  static hasValidContact(data: any): boolean {
+    const hasPhone = Boolean(data.phone && this.validatePhone(data.phone));
+    const hasEmail = Boolean(data.email && this.validateEmail(data.email));
+    return hasPhone || hasEmail;
   }
 }
 
@@ -184,7 +216,8 @@ export class LeadService {
       return { lead: null, status: 'rejected_unverified' as const };
     }
 
-    if (options?.requireVerifiedContact && !ValidationService.isVerifiedBusiness(data, true)) {
+    // Always ensure it is a complete, strictly verified business (address + city + phone + website)
+    if (!ValidationService.isVerifiedBusiness(data)) {
       return { lead: null, status: 'rejected_unverified' as const };
     }
 
@@ -228,10 +261,13 @@ export class LeadService {
       return { lead: existingLead, status: 'duplicate' as const };
     }
 
-    const hasWebsite = Boolean(data.website);
+    const rawWebsite = data.website?.trim();
+    const isSocialOrDir = ValidationService.isSocialOrDirectoryUrl(rawWebsite);
+    const hasWebsite = Boolean(rawWebsite && !isSocialOrDir);
+
     const qualityReport = NormalizationService.computeDataQuality({
       phone: displayPhone || data.phone,
-      website: data.website,
+      website: hasWebsite ? rawWebsite : null,
       email: data.email,
       address: data.address,
       notes: data.notes,
@@ -253,14 +289,14 @@ export class LeadService {
       phone: displayPhone || data.phone,
       normalizedPhone: normalizedPhone || null,
       email: data.email,
-      website: data.website,
-      normalizedDomain,
+      website: hasWebsite ? rawWebsite : null,
+      normalizedDomain: hasWebsite ? normalizedDomain : null,
       googleRating: data.googleRating,
       googleReviews: data.googleReviews,
       source: data.source || 'OpenStreetMap',
       sourceUrl: data.sourceUrl,
       discoverySource: data.source || 'OpenStreetMap',
-      websiteStatus: hasWebsite ? (data.website?.includes('facebook.com') || data.website?.includes('instagram.com') || data.website?.includes('linkedin.com') ? 'social_profile' : 'verified') : 'unknown',
+      websiteStatus: hasWebsite ? 'verified' : 'not_detected',
       websiteConfidence: hasWebsite ? 'HIGH' : 'UNKNOWN',
       dataConfidence: qualityReport.confidence,
       opportunityScore: qualityReport.score,
@@ -307,16 +343,33 @@ export class LeadService {
       });
     }
 
-    if (data.website) {
+    if (hasWebsite && rawWebsite) {
       evidenceItems.push({
         leadId: newLead.id,
         fieldName: 'website',
-        value: data.website,
+        value: rawWebsite,
         source: sourceName,
         sourceUrl: data.sourceUrl || null,
         verified: true,
         confidence: 'HIGH' as const,
       });
+    }
+
+    // If initial website passed was actually a verified social link, capture it as social profile
+    if (isSocialOrDir && rawWebsite) {
+      const fb = SocialEnrichmentService.normalizeFacebookUrl(rawWebsite);
+      const insta = SocialEnrichmentService.normalizeInstagramUrl(rawWebsite);
+      const li = SocialEnrichmentService.normalizeLinkedInUrl(rawWebsite);
+      const tw = SocialEnrichmentService.normalizeTwitterUrl(rawWebsite);
+      if (fb) {
+        evidenceItems.push({ leadId: newLead.id, fieldName: 'facebook', value: fb, source: sourceName, sourceUrl: fb, verified: true, confidence: 'HIGH' as const });
+      } else if (insta) {
+        evidenceItems.push({ leadId: newLead.id, fieldName: 'instagram', value: insta, source: sourceName, sourceUrl: insta, verified: true, confidence: 'HIGH' as const });
+      } else if (li) {
+        evidenceItems.push({ leadId: newLead.id, fieldName: 'linkedin', value: li, source: sourceName, sourceUrl: li, verified: true, confidence: 'HIGH' as const });
+      } else if (tw) {
+        evidenceItems.push({ leadId: newLead.id, fieldName: 'twitter', value: tw, source: sourceName, sourceUrl: tw, verified: true, confidence: 'HIGH' as const });
+      }
     }
 
     if (data.rawData?.openingHours) {
@@ -332,17 +385,28 @@ export class LeadService {
     }
 
     if (data.rawData?.socialLinks) {
-      Object.entries(data.rawData.socialLinks).forEach(([platform, url]) => {
-        if (url && typeof url === 'string') {
-          evidenceItems.push({
-            leadId: newLead.id,
-            fieldName: platform,
-            value: url,
-            source: sourceName,
-            sourceUrl: url,
-            verified: true,
-            confidence: 'HIGH' as const,
-          });
+      Object.entries(data.rawData.socialLinks).forEach(([platform, rawUrl]) => {
+        if (rawUrl && typeof rawUrl === 'string') {
+          let cleanUrl: string | null = null;
+          if (platform === 'facebook') cleanUrl = SocialEnrichmentService.normalizeFacebookUrl(rawUrl);
+          else if (platform === 'instagram') cleanUrl = SocialEnrichmentService.normalizeInstagramUrl(rawUrl);
+          else if (platform === 'linkedin') cleanUrl = SocialEnrichmentService.normalizeLinkedInUrl(rawUrl);
+          else if (platform === 'twitter') cleanUrl = SocialEnrichmentService.normalizeTwitterUrl(rawUrl);
+
+          if (cleanUrl) {
+            // Avoid duplicate evidence for same field
+            if (!evidenceItems.some(e => e.fieldName === platform)) {
+              evidenceItems.push({
+                leadId: newLead.id,
+                fieldName: platform,
+                value: cleanUrl,
+                source: sourceName,
+                sourceUrl: cleanUrl,
+                verified: true,
+                confidence: 'HIGH' as const,
+              });
+            }
+          }
         }
       });
     }

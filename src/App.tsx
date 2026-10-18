@@ -13,6 +13,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { cn, formatDate } from './lib/utils.ts';
 import Papa from 'papaparse';
 import { CommercialToolkit, formatWhatsAppNumber } from './components/CommercialToolkit.tsx';
+import { analyzePhoneNumber } from './lib/phoneUtils.ts';
 
 // --- API Helper ---
 const parseApiResponse = async (res: Response) => {
@@ -1362,9 +1363,9 @@ function GenerateView({ token }: any) {
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-                  <StatMini label="Bruts Détectés" value={results.totalFound || 0} />
+                  <StatMini label="Établissements Sondés" value={results.totalFound || 0} />
                   <StatMini label="Chaînes Écartées" value={results.chainsFiltered || 0} color="text-rose-600 font-bold" />
-                  <StatMini label="PME Qualifiées" value={results.validBusinesses || 0} color="text-emerald-600 font-bold" />
+                  <StatMini label="Prospects Réels Qualifiés" value={results.validBusinesses || 0} color="text-emerald-600 font-bold" />
                   <StatMini label="Doublons Filtrés" value={results.duplicates || 0} color="text-slate-400" />
                   <StatMini label="Candidats Web" value={results.websiteCandidates || 0} color="text-amber-600" />
                   <StatMini label="Sites Vérifiés" value={results.verifiedWebsites || 0} color="text-teal-600" />
@@ -1390,7 +1391,7 @@ function GenerateView({ token }: any) {
               </div>
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span className="text-slate-600"><strong>Crawler Natif Rapide :</strong> Exploration parallèle de la page contact et des mentions légales (SIRET, gérant, téléphone, WhatsApp).</span>
+                <span className="text-slate-600"><strong>Moteur de Scraping Scrapling :</strong> Exploration furtive anti-bot via le framework officiel <code>D4Vinci/Scrapling</code> (impersonation TLS, contournement Cloudflare, extraction SIRET, gérants et contacts).</span>
               </div>
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
@@ -1402,10 +1403,10 @@ function GenerateView({ token }: any) {
           <div className="bg-slate-900 p-6 rounded-2xl text-white space-y-4 shadow-xl shadow-slate-900/10">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <h4 className="text-xs font-bold uppercase tracking-wider">Stack 100% Gratuite ($0 MVP)</h4>
+              <h4 className="text-xs font-bold uppercase tracking-wider">Moteur Scrapling & Stack $0 MVP</h4>
             </div>
             <p className="text-[11px] opacity-80 leading-relaxed">
-              LeadForge fonctionne nativement sans aucune clé API payante requise (OpenStreetMap, Nominatim, Crawler Cheerio ultra-rapide, Sondage de domaines locaux).
+              LeadForge intègre directement le framework <strong>Scrapling</strong> (D4Vinci/Scrapling) pour le contournement anti-bot et l'extraction DOM adaptative, combiné à OpenStreetMap et Nominatim sans aucune clé API payante requise.
             </p>
           </div>
         </div>
@@ -1773,7 +1774,7 @@ function LeadsView({ token, onSelectLead }: any) {
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [cityFilter, setCityFilter] = useState<string[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
-  const [contactFilter, setContactFilter] = useState('all');
+  const [contactFilter, setContactFilter] = useState('valid_contact');
   const [websiteFilter, setWebsiteFilter] = useState('all');
   const [oppScoreFilter, setOppScoreFilter] = useState('all');
   const [auditFilter, setAuditFilter] = useState('all');
@@ -1832,6 +1833,7 @@ function LeadsView({ token, onSelectLead }: any) {
     if (oppScoreFilter && oppScoreFilter !== 'all') params.append('oppScoreRange', oppScoreFilter);
     if (auditFilter && auditFilter !== 'all') params.append('auditFilter', auditFilter);
     if (intentFilter && intentFilter !== 'all') params.append('intentFilter', intentFilter);
+    params.append('confidence', 'HIGH');
     params.append('scope', scopeFilter);
     params.append('sortBy', sortBy);
     params.append('sortOrder', sortOrder);
@@ -2005,6 +2007,11 @@ function LeadsView({ token, onSelectLead }: any) {
 
       {/* 1-Click Interactive Quick Filter Pills */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl font-bold shrink-0 shadow-2xs">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Prospects Certifiés 100% Vérifiés</span>
+        </div>
+
         <button
           onClick={() => { resetAllFilters(); }}
           className={cn(
@@ -2033,6 +2040,24 @@ function LeadsView({ token, onSelectLead }: any) {
         >
           <Sparkles className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
           <span>🔥 Haute Intention (Prêts à Signer)</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setContactFilter(contactFilter === 'valid_contact' ? 'all' : 'valid_contact');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            contactFilter === 'valid_contact'
+              ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+              : "bg-emerald-50/70 text-emerald-800 border-emerald-200 hover:bg-emerald-100/70"
+          )}
+          title="Afficher uniquement les prospects validés avec téléphone direct ou email vérifié"
+        >
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          <span>🎯 Contact Valide (Tél ou Email)</span>
+          <span className="text-[10px] opacity-80 font-mono">({summary.withValidContact ?? ((summary.withPhone || 0) + (summary.withEmail || 0))})</span>
         </button>
 
         <button
@@ -2264,9 +2289,10 @@ function LeadsView({ token, onSelectLead }: any) {
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
               >
                 <option value="all">Tous les canaux</option>
+                <option value="valid_contact">🎯 Contact Valide Uniquement (Tél ou Email)</option>
                 <option value="has_phone">📞 Avec Téléphone direct</option>
                 <option value="has_email">✉️ Avec Email officiel</option>
-                <option value="has_both">🎯 Téléphone ET Email (Complet)</option>
+                <option value="has_both">💎 Téléphone ET Email (Complet)</option>
                 <option value="missing_phone">🚫 Sans Téléphone</option>
               </select>
             </div>
@@ -2355,7 +2381,12 @@ function LeadsView({ token, onSelectLead }: any) {
               ))}
               {contactFilter !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg font-medium text-[11px]">
-                  Contact : {contactFilter}
+                  {contactFilter === 'valid_contact' ? '🎯 Contact valide (Tél ou Email)' :
+                   contactFilter === 'has_phone' ? '📞 Avec Téléphone' :
+                   contactFilter === 'has_email' ? '✉️ Avec Email' :
+                   contactFilter === 'has_both' ? '💎 Tél + Email complet' :
+                   contactFilter === 'missing_phone' ? '🚫 Sans Téléphone' :
+                   `Contact : ${contactFilter}`}
                   <button onClick={() => setContactFilter('all')} className="hover:text-emerald-950 font-bold ml-1">×</button>
                 </span>
               )}
@@ -2513,28 +2544,39 @@ function LeadsView({ token, onSelectLead }: any) {
                     </td>
                     <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-1.5">
-                        {lead.phone ? (
-                          <>
-                            <a
-                              href={`https://wa.me/${formatWhatsAppNumber(lead.phone, lead.country)}?text=${encodeURIComponent(`Bonjour, je me permets de vous contacter au sujet de ${lead.companyName} à ${lead.city || 'votre secteur'}. Auriez-vous 2 minutes pour échanger ?`)}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-md transition-all shadow-2xs"
-                              title={`Ouvrir WhatsApp (+${formatWhatsAppNumber(lead.phone, lead.country)})`}
-                            >
-                              <MessageCircle className="w-3.5 h-3.5" />
-                            </a>
-                            <a
-                              href={`tel:${lead.phone}`}
-                              className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-md transition-all shadow-2xs"
-                              title={`Appeler directement (${lead.phone})`}
-                            >
-                              <Phone className="w-3.5 h-3.5" />
-                            </a>
-                          </>
-                        ) : (
-                          <span className="text-[10px] text-slate-300 italic">Sans tél</span>
-                        )}
+                        {(() => {
+                          if (!lead.phone) {
+                            return <span className="text-[10px] text-slate-300 italic">Sans tél</span>;
+                          }
+                          const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp));
+                          return (
+                            <>
+                              {phoneAnalysis.isWhatsAppReady && phoneAnalysis.whatsappUrl ? (
+                                <a
+                                  href={`${phoneAnalysis.whatsappUrl}?text=${encodeURIComponent(`Bonjour, je me permets de vous contacter au sujet de ${lead.companyName} à ${lead.city || 'votre secteur'}. Auriez-vous 2 minutes pour échanger ?`)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-md transition-all shadow-2xs"
+                                  title={`Ouvrir WhatsApp Mobile (+${phoneAnalysis.internationalNumber})`}
+                                >
+                                  <MessageCircle className="w-3.5 h-3.5" />
+                                </a>
+                              ) : null}
+                              <a
+                                href={phoneAnalysis.directCallUrl}
+                                className={cn(
+                                  "p-1.5 rounded-md transition-all shadow-2xs border",
+                                  phoneAnalysis.type === 'fixed'
+                                    ? "bg-sky-50 hover:bg-sky-100 text-sky-700 border-sky-200"
+                                    : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                )}
+                                title={`Appeler directement (${phoneAnalysis.typeLabel}: ${lead.phone})`}
+                              >
+                                <Phone className="w-3.5 h-3.5" />
+                              </a>
+                            </>
+                          );
+                        })()}
 
                         {lead.email && (
                           <a
@@ -2804,12 +2846,34 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
                 <MapPin className="w-4 h-4 text-slate-300 shrink-0 mt-0.5" />
                 <span className="text-xs font-medium text-slate-600">{lead.address || 'Adresse locale non précisée'}, {lead.city}, {lead.country}</span>
               </div>
-              {lead.phone && (
-                <div className="flex items-center gap-3">
-                  <Phone className="w-4 h-4 text-slate-300 shrink-0" />
-                  <a href={`tel:${lead.phone}`} className="text-xs font-bold text-slate-700 hover:text-slate-900 truncate">{lead.phone}</a>
-                </div>
-              )}
+              {lead.phone && (() => {
+                const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp));
+                return (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <Phone className="w-4 h-4 text-slate-300 shrink-0" />
+                      <a href={`tel:${lead.phone}`} className="text-xs font-bold text-slate-700 hover:text-slate-900 truncate" title="Lancer l'appel direct">
+                        {lead.phone}
+                      </a>
+                    </div>
+                    {phoneAnalysis.isWhatsAppReady && phoneAnalysis.whatsappUrl ? (
+                      <a
+                        href={phoneAnalysis.whatsappUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 inline-flex items-center gap-1 shadow-2xs"
+                        title="Ouvrir WhatsApp"
+                      >
+                        <MessageCircle className="w-3 h-3 text-emerald-600" /> WhatsApp
+                      </a>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 inline-flex items-center gap-1">
+                        ☎️ {phoneAnalysis.typeLabel}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               {lead.email && (
                 <div className="flex items-center gap-3">
                   <Mail className="w-4 h-4 text-slate-300 shrink-0" />
@@ -2846,10 +2910,13 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
                   <div className="flex flex-wrap gap-1.5">
                     {foundSocials.map((s: any) => {
                       const name = s.fieldName.toLowerCase();
+                      const href = s.value?.startsWith('http://') || s.value?.startsWith('https://') 
+                        ? s.value 
+                        : `https://${s.value?.replace(/^\/+/, '')}`;
                       return (
                         <a
                           key={s.id || s.value}
-                          href={s.value}
+                          href={href}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-semibold text-slate-700 transition-colors shadow-2xs"

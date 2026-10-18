@@ -410,9 +410,9 @@ export class JobService {
             enrichmentSource: 'SOCIAL_MEDIA'
           };
 
-          if (socialResult.socialUrl) {
-            updateObj.website = socialResult.socialUrl;
-            updateObj.websiteStatus = 'social_profile';
+          if (socialResult.discoveredWebsite && !lead.website) {
+            updateObj.website = socialResult.discoveredWebsite;
+            updateObj.websiteStatus = 'verified';
             updateObj.websiteConfidence = 'HIGH';
             results.verifiedWebsites = (results.verifiedWebsites || 0) + 1;
           }

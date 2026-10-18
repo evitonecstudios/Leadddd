@@ -26,9 +26,8 @@ export class SocialEnrichmentService {
   private static GOOGLEBOT_USER_AGENT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
 
   /**
-   * Discovers and extracts real, verified information from social media profiles
-   * when a local business does NOT have an official website.
-   * Strictly extracts from actual public HTTP responses — ZERO fake/synthetic data.
+   * Normalizes and validates real social media profile URLs from verified data sources.
+   * STRICT POLICY: NEVER guesses or invents synthetic profile URLs or slugs.
    */
   static async enrichFromSocialMedia(
     companyName: string, 
@@ -41,47 +40,38 @@ export class SocialEnrichmentService {
       evidence: []
     };
 
-    if (!companyName || companyName.trim().length < 2) return result;
+    if (!existingRawTags) return result;
 
-    // 1. Check if raw OpenStreetMap tags already contained official social links
-    if (existingRawTags) {
-      this.extractSocialFromTags(existingRawTags, result);
+    // 1. Extract ONLY authentic social links present in real tags
+    this.extractSocialFromTags(existingRawTags, result);
+
+    // If no real social links found in tags, return immediately — ZERO synthetic guesses
+    const verifiedCandidates: Array<{ url: string; platform: SocialEnrichmentResult['platform'] }> = [];
+    if (result.socialLinks.facebook) verifiedCandidates.push({ url: result.socialLinks.facebook, platform: 'facebook' });
+    if (result.socialLinks.instagram) verifiedCandidates.push({ url: result.socialLinks.instagram, platform: 'instagram' });
+    if (result.socialLinks.linkedin) verifiedCandidates.push({ url: result.socialLinks.linkedin, platform: 'linkedin' });
+    if (result.socialLinks.twitter) verifiedCandidates.push({ url: result.socialLinks.twitter, platform: 'twitter' });
+
+    if (verifiedCandidates.length === 0) {
+      return result;
     }
 
-    // 2. Discover potential social profile candidates if none found in raw tags
-    const candidateUrls: Array<{ url: string; platform: SocialEnrichmentResult['platform'] }> = [];
-
-    // Add any already found in tags
-    if (result.socialLinks.facebook) candidateUrls.push({ url: result.socialLinks.facebook, platform: 'facebook' });
-    if (result.socialLinks.instagram) candidateUrls.push({ url: result.socialLinks.instagram, platform: 'instagram' });
-    if (result.socialLinks.linkedin) candidateUrls.push({ url: result.socialLinks.linkedin, platform: 'linkedin' });
-    if (result.socialLinks.twitter) candidateUrls.push({ url: result.socialLinks.twitter, platform: 'twitter' });
-
-    // If no direct social links in tags, probe deterministic public profile candidate slugs
-    if (candidateUrls.length === 0) {
-      const slugs = this.generateSocialSlugs(companyName, city);
-      for (const slug of slugs.slice(0, 2)) {
-        candidateUrls.push({ url: `https://www.facebook.com/${slug}`, platform: 'facebook' });
-        candidateUrls.push({ url: `https://www.instagram.com/${slug}/`, platform: 'instagram' });
-      }
-    }
-
-    // 3. Inspect public social profile pages for real contact information
+    // 2. Safely inspect verified public profiles for contact details (phone, email, real site)
     const permissiveAgent = new https.Agent({ rejectUnauthorized: false });
 
-    for (const candidate of candidateUrls) {
+    for (const candidate of verifiedCandidates) {
       try {
         const userAgent = candidate.platform === 'facebook' ? this.CRAWLER_USER_AGENT : this.GOOGLEBOT_USER_AGENT;
         const res = await axios.get(candidate.url, {
           headers: {
             'User-Agent': userAgent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8,de;q=0.7',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8',
             'Cache-Control': 'no-cache'
           },
           httpsAgent: permissiveAgent,
-          timeout: 6000,
-          maxRedirects: 3,
+          timeout: 4000,
+          maxRedirects: 2,
           validateStatus: (status) => status >= 200 && status < 400
         });
 
@@ -93,31 +83,9 @@ export class SocialEnrichmentService {
                        $('meta[name="description"]').attr('content') || '';
         const fullSnippet = `${ogTitle} ${ogDesc}`.trim();
 
-        // Verify that the page actually relates to the business name
-        const cleanCompanyName = companyName.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const cleanSnippet = fullSnippet.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const isMatch = cleanSnippet.includes(cleanCompanyName.slice(0, Math.min(cleanCompanyName.length, 6)));
-
-        if (!isMatch && !candidateUrls.some(c => c.url === candidate.url)) {
-          // Slug probe didn't match real business name
+        // Discard generic login/splash boilerplate
+        if (this.isGenericSocialBoilerplate(fullSnippet)) {
           continue;
-        }
-
-        // We found a real matching profile!
-        if (!result.socialUrl) {
-          result.socialUrl = candidate.url;
-          result.platform = candidate.platform;
-        }
-
-        if (candidate.platform && !result.socialLinks[candidate.platform]) {
-          result.socialLinks[candidate.platform] = candidate.url;
-          result.evidence.push({
-            field: candidate.platform,
-            value: candidate.url,
-            url: candidate.url,
-            method: 'Verified Social Presence',
-            confidence: 'HIGH'
-          });
         }
 
         // Extract real phone numbers from public social description
@@ -150,22 +118,7 @@ export class SocialEnrichmentService {
           }
         }
 
-        // Extract real address if specified in description
-        if (!result.address && city) {
-          const addr = this.extractAddressFromText(fullSnippet, city);
-          if (addr) {
-            result.address = addr;
-            result.evidence.push({
-              field: 'address',
-              value: addr,
-              url: candidate.url,
-              method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
-              confidence: 'HIGH'
-            });
-          }
-        }
-
-        // Extract external website link from bio if present!
+        // Extract external official website link if listed in bio
         if (!result.discoveredWebsite) {
           const websiteCandidate = this.extractWebsiteFromBio(fullSnippet);
           if (websiteCandidate) {
@@ -180,56 +133,138 @@ export class SocialEnrichmentService {
           }
         }
 
-        if (ogDesc && !result.bio && ogDesc.length > 20) {
-          result.bio = ogDesc.slice(0, 300).trim();
-          result.evidence.push({
-            field: 'social_bio',
-            value: result.bio,
-            url: candidate.url,
-            method: `${candidate.platform?.toUpperCase()} Profile Summary`,
-            confidence: 'HIGH'
-          });
-        }
-
       } catch (err: any) {
-        // Skip inaccessible social profile gracefully
-        await logger.warn('SOCIAL_SCRAPER', `Notice inspecting ${candidate.url}: ${err.message}`, { companyName }, 'SOCIAL_SCRAPER');
+        // Safe skip
+        await logger.warn('SOCIAL_SCRAPER', `Notice inspecting verified social URL ${candidate.url}: ${err.message}`, { companyName }, 'SOCIAL_SCRAPER');
       }
     }
 
     return result;
   }
 
+  public static normalizeFacebookUrl(raw?: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    let clean = raw.trim();
+    if (clean.length < 2) return null;
+
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = clean.replace(/^@/, '').replace(/^facebook\.com\/?/i, '').replace(/^www\.facebook\.com\/?/i, '');
+      if (!clean) return null;
+      clean = `https://www.facebook.com/${clean}`;
+    }
+
+    try {
+      const u = new URL(clean);
+      if (!u.hostname.includes('facebook.com')) return null;
+      const path = u.pathname.replace(/\/+$/, '').toLowerCase();
+      const blockedPaths = ['', '/', '/home', '/login', '/policies', '/help', '/sharer', '/share', '/dialog', '/tr', '/plugins', '/pages'];
+      if (blockedPaths.includes(path) || path.length < 2) return null;
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return null;
+    }
+  }
+
+  public static normalizeInstagramUrl(raw?: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    let clean = raw.trim();
+    if (clean.length < 2) return null;
+
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = clean.replace(/^@/, '').replace(/^instagram\.com\/?/i, '').replace(/^www\.instagram\.com\/?/i, '').replace(/\/$/, '');
+      if (!clean) return null;
+      clean = `https://www.instagram.com/${clean}/`;
+    }
+
+    try {
+      const u = new URL(clean);
+      if (!u.hostname.includes('instagram.com')) return null;
+      const path = u.pathname.replace(/\/+$/, '').toLowerCase();
+      const blockedPaths = ['', '/', '/p', '/explore', '/stories', '/reels', '/accounts', '/about', '/legal', '/direct'];
+      if (blockedPaths.includes(path) || path.length < 2) return null;
+      return `${u.origin}${u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`}`;
+    } catch {
+      return null;
+    }
+  }
+
+  public static normalizeLinkedInUrl(raw?: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    let clean = raw.trim();
+    if (clean.length < 3) return null;
+
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = clean.replace(/^@/, '').replace(/^linkedin\.com\/?/i, '').replace(/^www\.linkedin\.com\/?/i, '');
+      if (!clean) return null;
+      clean = clean.startsWith('company/') || clean.startsWith('in/')
+        ? `https://www.linkedin.com/${clean}`
+        : `https://www.linkedin.com/company/${clean}`;
+    }
+
+    try {
+      const u = new URL(clean);
+      if (!u.hostname.includes('linkedin.com')) return null;
+      const path = u.pathname.replace(/\/+$/, '').toLowerCase();
+      if (!path || path === '/' || path === '/company' || path === '/in') return null;
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return null;
+    }
+  }
+
+  public static normalizeTwitterUrl(raw?: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    let clean = raw.trim();
+    if (clean.length < 2) return null;
+
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = clean.replace(/^@/, '').replace(/^(?:twitter|x)\.com\/?/i, '');
+      if (!clean) return null;
+      clean = `https://x.com/${clean}`;
+    }
+
+    try {
+      const u = new URL(clean);
+      if (!u.hostname.includes('twitter.com') && !u.hostname.includes('x.com')) return null;
+      const path = u.pathname.replace(/\/+$/, '').toLowerCase();
+      const blockedPaths = ['', '/', '/home', '/login', '/intent', '/share', '/search'];
+      if (blockedPaths.includes(path) || path.length < 2) return null;
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return null;
+    }
+  }
+
   private static extractSocialFromTags(tags: Record<string, any>, result: SocialEnrichmentResult) {
-    const fb = tags['contact:facebook'] || tags.facebook;
-    if (fb && typeof fb === 'string' && fb.trim().length > 5) {
-      const cleanFb = fb.startsWith('http') ? fb.trim() : `https://www.facebook.com/${fb.trim().replace(/^@/, '')}`;
+    const rawFb = tags['contact:facebook'] || tags.facebook;
+    const cleanFb = this.normalizeFacebookUrl(rawFb);
+    if (cleanFb) {
       result.socialLinks.facebook = cleanFb;
       result.evidence.push({ field: 'facebook', value: cleanFb, url: cleanFb, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
     }
 
-    const insta = tags['contact:instagram'] || tags.instagram;
-    if (insta && typeof insta === 'string' && insta.trim().length > 3) {
-      const cleanInsta = insta.startsWith('http') ? insta.trim() : `https://www.instagram.com/${insta.trim().replace(/^@/, '')}/`;
+    const rawInsta = tags['contact:instagram'] || tags.instagram;
+    const cleanInsta = this.normalizeInstagramUrl(rawInsta);
+    if (cleanInsta) {
       result.socialLinks.instagram = cleanInsta;
       result.evidence.push({ field: 'instagram', value: cleanInsta, url: cleanInsta, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
     }
 
-    const linkedin = tags['contact:linkedin'] || tags.linkedin;
-    if (linkedin && typeof linkedin === 'string' && linkedin.trim().length > 5) {
-      const cleanLi = linkedin.startsWith('http') ? linkedin.trim() : `https://www.linkedin.com/company/${linkedin.trim()}`;
+    const rawLi = tags['contact:linkedin'] || tags.linkedin;
+    const cleanLi = this.normalizeLinkedInUrl(rawLi);
+    if (cleanLi) {
       result.socialLinks.linkedin = cleanLi;
       result.evidence.push({ field: 'linkedin', value: cleanLi, url: cleanLi, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
     }
 
-    const twitter = tags['contact:twitter'] || tags.twitter;
-    if (twitter && typeof twitter === 'string' && twitter.trim().length > 2) {
-      const cleanTw = twitter.startsWith('http') ? twitter.trim() : `https://x.com/${twitter.trim().replace(/^@/, '')}`;
+    const rawTw = tags['contact:twitter'] || tags.twitter;
+    const cleanTw = this.normalizeTwitterUrl(rawTw);
+    if (cleanTw) {
       result.socialLinks.twitter = cleanTw;
       result.evidence.push({ field: 'twitter', value: cleanTw, url: cleanTw, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
     }
 
-    const phone = tags.phone || tags['contact:phone'];
+    const phone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile;
     if (phone && !result.phone) {
       result.phone = String(phone).trim();
       result.evidence.push({ field: 'phone', value: result.phone, url: 'https://www.openstreetmap.org/', method: 'OpenStreetMap contact:phone tag', confidence: 'HIGH' });
@@ -242,25 +277,19 @@ export class SocialEnrichmentService {
     }
   }
 
-  private static generateSocialSlugs(companyName: string, city?: string): string[] {
-    const cleanName = companyName
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9\s]/g, '')
-      .trim();
-
-    const noSpaces = cleanName.replace(/\s+/g, '');
-    const hyphenated = cleanName.replace(/\s+/g, '.');
-    const slugs = [noSpaces, hyphenated];
-
-    if (city) {
-      const cleanCity = city.toLowerCase().replace(/[^a-z0-9]/g, '');
-      slugs.push(`${noSpaces}${cleanCity}`);
-      slugs.push(`${hyphenated}.${cleanCity}`);
-    }
-
-    return slugs.filter(s => s.length >= 4);
+  private static isGenericSocialBoilerplate(text: string): boolean {
+    const lower = text.toLowerCase();
+    const boilerplateKeywords = [
+      'welcome back to instagram',
+      'log in to check out what your friends',
+      'log into facebook',
+      'see posts, photos and more on facebook',
+      'create an account or log in',
+      'join facebook to connect',
+      'login • instagram',
+      'sign up for facebook'
+    ];
+    return boilerplateKeywords.some(b => lower.includes(b));
   }
 
   private static extractPhoneFromText(text: string): string | undefined {
@@ -291,16 +320,6 @@ export class SocialEnrichmentService {
     return undefined;
   }
 
-  private static extractAddressFromText(text: string, city: string): string | undefined {
-    // Look for lines containing numbers + street keywords + the city name
-    const regex = new RegExp(`(\\d{1,4}[^,\\n]{3,60}(?:street|st|rue|avenue|ave|boulevard|blvd|road|rd|chemin|strasse|str)[^,\\n]{0,40}${city})`, 'i');
-    const match = text.match(regex);
-    if (match && match[1]) {
-      return match[1].trim().replace(/\s+/g, ' ');
-    }
-    return undefined;
-  }
-
   private static extractWebsiteFromBio(text: string): string | undefined {
     const urlRegex = /(?:https?:\/\/|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\/[^\s,)]*)?/g;
     const matches = text.match(urlRegex);
@@ -309,7 +328,7 @@ export class SocialEnrichmentService {
     for (const match of matches) {
       const lower = match.toLowerCase();
       if (!lower.includes('facebook.com') && !lower.includes('instagram.com') && 
-          !lower.includes('fb.me') && !lower.includes('twitter.com') && 
+          !lower.includes('fb.me') && !lower.includes('twitter.com') && !lower.includes('x.com') &&
           !lower.includes('bit.ly') && !lower.includes('linktr.ee')) {
         return match.startsWith('http') ? match : `https://${match}`;
       }

@@ -214,7 +214,8 @@ STRICT ARCHITECTURE & SAFETY RULES:
 3. NO HALLUCINATIONS: Do not invent revenue, employee counts, traffic numbers, Google rankings, or specific business problems not found in the evidence.
 4. EVIDENCE LOCK: Every factual claim must be supported by the provided findings or opportunities.
 5. NO UNSUPPORTED PROMISES: Do not claim that changes will "double sales" or "guarantee results". Use ${isFrench ? '"pourrait améliorer" ou "opportunité potentielle"' : '"could improve" or "potential opportunity"'}.
-6. TONE: ${toneInstruction}
+6. STRICT CONSISTENCY WITH SCORES: If an audit category has a high score (e.g. SEO score >= 75/100, Performance >= 75/100), acknowledge it as a strong point ("strengths"). DO NOT claim their SEO or site speed is bad if the score is good! Instead, focus your sales angles on what actually scored low (e.g. Conversion, WhatsApp 1-clic, Booking, Local Business Schema, or Absence of website).
+7. TONE: ${toneInstruction}
 ${languageInstruction}
 
 INPUT DATA:

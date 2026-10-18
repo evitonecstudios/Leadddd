@@ -5,30 +5,13 @@ import {
   Flame, HelpCircle, ArrowRight, ShieldCheck, UserCheck, AlertTriangle, X
 } from 'lucide-react';
 import { cn } from '../lib/utils.ts';
+import { 
+  analyzePhoneNumber, 
+  formatInternationalNumber, 
+  formatWhatsAppNumber 
+} from '../lib/phoneUtils.ts';
 
-// Helper for formatting international WhatsApp numbers
-export function formatWhatsAppNumber(phone?: string | null, country?: string | null): string {
-  if (!phone) return '';
-  let cleaned = phone.replace(/[^\d+]/g, '');
-  if (cleaned.startsWith('+')) {
-    cleaned = cleaned.substring(1);
-  } else if (cleaned.startsWith('00')) {
-    cleaned = cleaned.substring(2);
-  } else if (cleaned.startsWith('0')) {
-    const c = (country || '').toLowerCase();
-    if (c.includes('switz') || c.includes('suisse') || c.includes('ch')) {
-      cleaned = '41' + cleaned.substring(1);
-    } else if (c.includes('belg') || c.includes('be')) {
-      cleaned = '32' + cleaned.substring(1);
-    } else if (c.includes('can') || c.includes('quebec')) {
-      cleaned = '1' + cleaned.substring(1);
-    } else {
-      // Default to France (+33)
-      cleaned = '33' + cleaned.substring(1);
-    }
-  }
-  return cleaned;
-}
+export { formatWhatsAppNumber };
 
 interface CommercialToolkitProps {
   lead: any;
@@ -93,7 +76,8 @@ export function CommercialToolkit({
     }
   };
 
-  const waNumber = formatWhatsAppNumber(lead.phone, lead.country);
+  const phoneInfo = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp));
+  const waNumber = phoneInfo.isWhatsAppReady ? phoneInfo.internationalNumber : '';
   const hasWebsite = Boolean(lead.website);
   const company = lead.companyName || 'votre établissement';
   const city = lead.city || 'votre secteur';
@@ -191,17 +175,21 @@ Votre Conseiller Prospection Locale`;
                   <Phone className="w-3.5 h-3.5" />
                   Appeler ({lead.phone})
                 </a>
-                {waNumber && (
+                {phoneInfo.isWhatsAppReady && waNumber ? (
                   <a
                     href={`https://wa.me/${waNumber}?text=${encodeURIComponent(waMessageShort)}`}
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg text-xs font-bold transition-all shadow-md shadow-emerald-950/20"
-                    title="Ouvrir WhatsApp Web / App"
+                    title={`Ouvrir WhatsApp Web / App (+${waNumber})`}
                   >
                     <MessageCircle className="w-3.5 h-3.5" />
                     WhatsApp Direct
                   </a>
+                ) : (
+                  <span className="px-2.5 py-1.5 bg-slate-800 text-slate-300 rounded-lg text-[11px] font-medium border border-slate-700 flex items-center gap-1">
+                    ☎️ {phoneInfo.typeLabel}
+                  </span>
                 )}
               </>
             ) : (
@@ -391,17 +379,17 @@ L'idée n'est rien de vous vendre aujourd'hui : est-ce que mardi à 10h ou jeudi
       {/* TAB 2: WHATSAPP MESSAGES */}
       {activeSubTab === 'whatsapp' && (
         <div className="space-y-4 animate-in fade-in duration-200">
-          <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-4 flex items-center justify-between">
-            <div className="space-y-0.5">
-              <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                <MessageCircle className="w-4 h-4 text-emerald-600" />
-                Numéro WhatsApp détecté : {waNumber ? `+${waNumber}` : 'Aucun numéro mobile'}
-              </span>
-              <p className="text-[11px] text-emerald-700">
-                Formate automatiquement l'indicatif international (France +33, Suisse +41, Belgique +32).
-              </p>
-            </div>
-            {waNumber && (
+          {phoneInfo.isWhatsAppReady && waNumber ? (
+            <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-4 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                  <MessageCircle className="w-4 h-4 text-emerald-600" />
+                  Numéro Mobile / WhatsApp Vérifié : +{waNumber}
+                </span>
+                <p className="text-[11px] text-emerald-700">
+                  Numéro mobile validé ({phoneInfo.typeLabel}). Prêt pour un envoi en 1-clic sur WhatsApp Web / Mobile.
+                </p>
+              </div>
               <a
                 href={`https://wa.me/${waNumber}?text=${encodeURIComponent(waMessageShort)}`}
                 target="_blank"
@@ -410,8 +398,48 @@ L'idée n'est rien de vous vendre aujourd'hui : est-ce que mardi à 10h ou jeudi
               >
                 Ouvrir WhatsApp Web <ExternalLink className="w-3 h-3" />
               </a>
-            )}
-          </div>
+            </div>
+          ) : phoneInfo.type === 'fixed' ? (
+            <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-4 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                  <Phone className="w-4 h-4 text-amber-600" />
+                  Ligne Téléphonique Fixe Détectée : {lead.phone}
+                </span>
+                <p className="text-[11px] text-amber-700">
+                  Ce numéro est une ligne fixe professionnelle (non connectée à WhatsApp). Privilégiez l'<strong>Appel Direct</strong> ou un email.
+                </p>
+              </div>
+              <a
+                href={`tel:${lead.phone}`}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-sm"
+              >
+                <Phone className="w-3 h-3" /> Lancer l'Appel Direct
+              </a>
+            </div>
+          ) : (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-slate-500" />
+                  {lead.phone ? `Numéro : ${lead.phone}` : 'Aucun numéro de téléphone détecté'}
+                </span>
+                <p className="text-[11px] text-slate-500">
+                  {lead.phone 
+                    ? 'Le format de ce numéro ne correspond pas à une ligne mobile certifiée pour WhatsApp.' 
+                    : 'Ce prospect n’a pas de coordonnée téléphonique renseignée.'}
+                </p>
+              </div>
+              {lead.phone && (
+                <a
+                  href={`tel:${lead.phone}`}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-lg flex items-center gap-1.5"
+                >
+                  <Phone className="w-3 h-3" /> Appeler
+                </a>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Template 1 */}

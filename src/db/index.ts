@@ -9,6 +9,23 @@ declare global {
   var _postgresPool: Pool | undefined;
 }
 
+export const sanitizePostgresUrl = (raw?: string): string | undefined => {
+  if (!raw) return undefined;
+  const trimmed = raw.trim().replace(/^["']|["']$/g, '').trim();
+  // Match: postgresql://USER:PASSWORD@HOST...
+  const match = trimmed.match(/^(postgres(?:ql)?:\/\/)([^:]+):(.*)@([^@]+)$/);
+  if (!match) return trimmed;
+  const [, prefix, user, rawPassword, hostAndRest] = match;
+
+  // Auto-encode special characters in password if they are unencoded
+  let cleanPassword = rawPassword;
+  try {
+    cleanPassword = decodeURIComponent(rawPassword);
+  } catch {}
+  const encodedPassword = encodeURIComponent(cleanPassword);
+  return `${prefix}${user}:${encodedPassword}@${hostAndRest}`;
+};
+
 export const getConnectionString = (): string | undefined => {
   const raw = 
     process.env.DATABASE_URL || 
@@ -17,9 +34,7 @@ export const getConnectionString = (): string | undefined => {
     process.env.SUPABASE_DB_URL || 
     process.env.DB_URL;
     
-  if (!raw) return undefined;
-  // Clean surrounding single/double quotes and whitespace that users often accidentally paste
-  return raw.trim().replace(/^["']|["']$/g, '');
+  return sanitizePostgresUrl(raw);
 };
 
 export const createPool = () => {
@@ -41,7 +56,7 @@ export const createPool = () => {
           connectionString: connString,
           ssl: isLocal ? false : { rejectUnauthorized: false },
           max: process.env.VERCEL ? 3 : 10,
-          connectionTimeoutMillis: 5000,
+          connectionTimeoutMillis: 8000,
           idleTimeoutMillis: 30000,
         });
       } else {
@@ -155,7 +170,9 @@ export async function checkDbHealth() {
     result.code = err.code;
 
     // Provide intelligent, actionable advice based on PostgreSQL error code
-    if (err.code === 'ECONNREFUSED') {
+    if (err.message?.includes('tenant/user') && err.message?.includes('not found')) {
+      result.diagnostics.recommendation = 'Erreur Supabase Pooler: Le mot de passe de la base de données est incorrect dans Vercel, ou le projet a été réinitialisé. Allez dans Supabase -> Project Settings -> Database -> "Reset database password", définissez un nouveau mot de passe, copiez la chaîne URI du Transaction Pooler (port 6543) et collez-la dans Vercel -> Settings -> Environment Variables, puis cliquez sur Deployments -> Redeploy.';
+    } else if (err.code === 'ECONNREFUSED') {
       result.diagnostics.recommendation = 'Connection refused. If on Vercel, localhost is not available. Please set DATABASE_URL with a cloud database (e.g. Supabase or Neon).';
     } else if (err.code === 'ETIMEDOUT') {
       result.diagnostics.recommendation = 'Connection timed out. On Supabase, use the Transaction Pooler URL (port 6543 with aws-0-*.pooler.supabase.com), not direct port 5432.';

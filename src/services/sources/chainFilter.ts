@@ -42,7 +42,7 @@ export class ChainFilter {
 
     // Telecom & Tech Operators
     'orange', 'sfr', 'bouygues telecom', 'bouygues', 'free center', 'free mobile',
-    'vodafone', 'o2', 't-mobile', 'at&t', 'verizon', 'swisscom', 'sunrise', 'salt store',
+    'vodafone', 'o2', 't-mobile', 'at&t', 'verizon', 'swisscom', 'sunrise', 'salt store', 'salt',
 
     // Banks & Financial Institutions
     'bnp paribas', 'societe generale', 'société générale', 'credit agricole', 'crédit agricole',
@@ -53,6 +53,7 @@ export class ChainFilter {
     // Fuel & Automotive Service Chains
     'total', 'totalenergies', 'shell', 'bp', 'esso', 'repsol', 'eni', 'norauto', 'feu vert',
     'midas', 'speedy', 'point s', 'carglass', 'euromaster', 'avis', 'hertz', 'sixt', 'europcar',
+    'avia', 'sherpa', 'agip', 'texaco', 'q8', 'relais', 'station total', 'station avia',
 
     // Eyewear Chains
     'optical center', 'alain afflelou', 'afflelou', 'krys', 'grandoptical', 'atol',

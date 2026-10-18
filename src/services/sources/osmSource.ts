@@ -4,6 +4,7 @@ import { logger, metrics } from '../../lib/monitoring.ts';
 import { OSMCategoryMapper } from './osmCategoryMapper.ts';
 import { ChainFilter } from './chainFilter.ts';
 import { ValidationService } from '../leadService.ts';
+import { SocialEnrichmentService } from '../socialEnrichmentService.ts';
 
 // Fast in-memory query cache with 1-hour TTL
 const queryCache = new Map<string, { leads: RawLead[]; timestamp: number }>();
@@ -163,29 +164,43 @@ export class OSMSource implements LeadSource {
         const lon = el.lon ?? el.center?.lon;
 
         // Comprehensive Contact & Social Tag Extraction
-        const phone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile || 
-                      tags['contact:mobile'] || tags['telephone'] || tags['contact:telephone'] || tags.tel;
+        const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile || 
+                         tags['contact:mobile'] || tags['telephone'] || tags['contact:telephone'] || tags.tel;
+        const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : undefined;
 
-        const officialWebsite = tags.website || tags['contact:website'] || tags.url || tags['contact:url'] || 
+        const rawWebCandidate = tags.website || tags['contact:website'] || tags.url || tags['contact:url'] || 
                                 tags['contact:web'] || tags['website:official'] || tags['website:menu'];
 
-        const socialFb = tags['contact:facebook'] || tags.facebook;
-        const socialInsta = tags['contact:instagram'] || tags.instagram;
-        const socialLinkedin = tags['contact:linkedin'] || tags.linkedin;
-        const socialTwitter = tags['contact:twitter'] || tags.twitter;
+        const normalizedFb = SocialEnrichmentService.normalizeFacebookUrl(tags['contact:facebook'] || tags.facebook || (rawWebCandidate?.includes('facebook.com') ? rawWebCandidate : undefined));
+        const normalizedInsta = SocialEnrichmentService.normalizeInstagramUrl(tags['contact:instagram'] || tags.instagram || (rawWebCandidate?.includes('instagram.com') ? rawWebCandidate : undefined));
+        const normalizedLi = SocialEnrichmentService.normalizeLinkedInUrl(tags['contact:linkedin'] || tags.linkedin || (rawWebCandidate?.includes('linkedin.com') ? rawWebCandidate : undefined));
+        const normalizedTw = SocialEnrichmentService.normalizeTwitterUrl(tags['contact:twitter'] || tags.twitter || (rawWebCandidate?.includes('twitter.com') || rawWebCandidate?.includes('x.com') ? rawWebCandidate : undefined));
 
-        const website = officialWebsite || socialFb || socialInsta || socialLinkedin;
-        const email = tags.email || tags['contact:email'] || tags['email:contact'];
+        // Official website: ONLY genuine website, never social profile or directory
+        let cleanOfficialWebsite: string | undefined = undefined;
+        if (rawWebCandidate && !ValidationService.isSocialOrDirectoryUrl(rawWebCandidate)) {
+          cleanOfficialWebsite = rawWebCandidate.trim();
+        }
+
+        const rawEmail = tags.email || tags['contact:email'] || tags['email:contact'];
+        const email = rawEmail && ValidationService.validateEmail(String(rawEmail)) ? String(rawEmail).trim().toLowerCase() : undefined;
         const openingHours = tags.opening_hours || tags['contact:opening_hours'];
 
-        const hasDirectContact = Boolean(phone || website || email);
-        if (criteria.requireContactInfo !== false && !hasDirectContact) {
+        if (ValidationService.isInvalidBusinessName(tags.name)) {
           continue;
         }
 
-        if (!hasDirectContact && (!address || address.length < 5)) {
+        const hasDirectContact = Boolean(phone || cleanOfficialWebsite || email || normalizedFb || normalizedInsta);
+        // Only real actionable businesses with direct contact information (Phone, Website, Email, or Social)
+        if (!hasDirectContact) {
           continue;
         }
+
+        const validSocialLinks: Record<string, string> = {};
+        if (normalizedFb) validSocialLinks.facebook = normalizedFb;
+        if (normalizedInsta) validSocialLinks.instagram = normalizedInsta;
+        if (normalizedLi) validSocialLinks.linkedin = normalizedLi;
+        if (normalizedTw) validSocialLinks.twitter = normalizedTw;
 
         results.push({
           source: 'osm',
@@ -195,21 +210,16 @@ export class OSMSource implements LeadSource {
           category: tags.shop || tags.amenity || tags.office || tags.craft || category,
           city: tags['addr:city'] || city,
           address: address || undefined,
-          phone: phone ? String(phone).trim() : undefined,
-          website: website ? String(website).trim() : undefined,
-          email: email ? String(email).trim() : undefined,
+          phone: phone,
+          website: cleanOfficialWebsite,
+          email: email,
           latitude: lat,
           longitude: lon,
           rawData: { 
             ...el, 
             chainsExcludedCount,
             openingHours,
-            socialLinks: {
-              facebook: socialFb,
-              instagram: socialInsta,
-              linkedin: socialLinkedin,
-              twitter: socialTwitter
-            }
+            socialLinks: validSocialLinks
           }
         });
       }

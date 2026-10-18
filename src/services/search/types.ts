@@ -1,7 +1,6 @@
 import {
   DuckDuckGoSearchProvider,
   GeminiSearchProvider,
-  LocalWebsiteDiscoveryProvider,
   GoogleSearchProvider,
   FirecrawlProvider,
   BingSearchProvider
@@ -24,7 +23,6 @@ export class SearchProviderFactory {
   private static providers: SearchProvider[] = [
     new GeminiSearchProvider(),
     new DuckDuckGoSearchProvider(),
-    new LocalWebsiteDiscoveryProvider(),
     new GoogleSearchProvider(),
     new FirecrawlProvider(),
     new BingSearchProvider()

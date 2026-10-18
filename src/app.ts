@@ -25,6 +25,8 @@ import Papa from 'papaparse';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+import { ScraplingService } from './services/scraplingService';
+
 export function createServerApp() {
   const app = express();
   app.use(express.json());
@@ -34,10 +36,16 @@ export function createServerApp() {
     try {
       const { checkDbHealth } = await import('./db/index');
       const dbStatus = await checkDbHealth();
+      const scraplingReady = await ScraplingService.isReady();
       res.json({ 
         status: 'ok', 
         environment: process.env.NODE_ENV,
         database: dbStatus,
+        scrapling: {
+          engine: 'D4Vinci/Scrapling',
+          ready: scraplingReady,
+          stealthBypass: true
+        },
         timestamp: new Date().toISOString()
       });
     } catch (err: any) {
@@ -248,7 +256,13 @@ export function createServerApp() {
 
     // Contact Channel Filter
     const contact = query.contactFilter || query.contact;
-    if (contact === 'has_phone' || query.hasPhone === 'true') {
+    if (contact === 'valid_contact' || query.onlyValidContact === 'true') {
+      conditions.push(or(
+        and(isNotNull(leads.phone), ne(leads.phone, '')),
+        and(isNotNull(leads.email), ne(leads.email, '')),
+        and(isNotNull(leads.website), ne(leads.website, ''))
+      ));
+    } else if (contact === 'has_phone' || query.hasPhone === 'true') {
       conditions.push(and(isNotNull(leads.phone), ne(leads.phone, '')));
     } else if (contact === 'missing_phone' || query.hasPhone === 'false') {
       conditions.push(or(isNull(leads.phone), eq(leads.phone, '')));
@@ -266,10 +280,12 @@ export function createServerApp() {
         and(isNotNull(leads.phone), ne(leads.phone, '')),
         and(isNotNull(leads.email), ne(leads.email, ''))
       ));
-    } else if (contact === 'missing_all') {
-      conditions.push(and(
-        or(isNull(leads.phone), eq(leads.phone, '')),
-        or(isNull(leads.email), eq(leads.email, ''))
+    } else {
+      // Exclude empty raw nodes that have no contact channels whatsoever
+      conditions.push(or(
+        and(isNotNull(leads.phone), ne(leads.phone, '')),
+        and(isNotNull(leads.email), ne(leads.email, '')),
+        and(isNotNull(leads.website), ne(leads.website, ''))
       ));
     }
 
@@ -321,10 +337,21 @@ export function createServerApp() {
     if (query.minAuditScore) conditions.push(gte(leads.auditScore, parseInt(query.minAuditScore)));
     if (query.maxAuditScore) conditions.push(lte(leads.auditScore, parseInt(query.maxAuditScore)));
 
-    // Data Confidence Filter
+    // Data Confidence & Certainty Filter: Do NOT show uncertain leads
     if (query.confidence && query.confidence !== 'ALL' && query.confidence !== 'all') {
       conditions.push(eq(leads.dataConfidence, String(query.confidence).toUpperCase()));
+    } else {
+      // Default: Strictly require HIGH confidence verified prospects
+      conditions.push(eq(leads.dataConfidence, 'HIGH'));
     }
+
+    // Strictly enforce real verified presence: address, city, and phone must never be empty
+    conditions.push(isNotNull(leads.address));
+    conditions.push(ne(leads.address, ''));
+    conditions.push(isNotNull(leads.city));
+    conditions.push(ne(leads.city, ''));
+    conditions.push(isNotNull(leads.phone));
+    conditions.push(ne(leads.phone, ''));
 
     // High Commercial Intent Filter
     const intentFilter = query.intentFilter;
@@ -386,6 +413,7 @@ export function createServerApp() {
 
       const summaryRes = await db.select({
         total: sql<number>`count(*)`,
+        withValidContact: sql<number>`count(*) filter (where (phone is not null and phone != '') or (email is not null and email != ''))`,
         withPhone: sql<number>`count(*) filter (where phone is not null and phone != '')`,
         withEmail: sql<number>`count(*) filter (where email is not null and email != '')`,
         withWebsite: sql<number>`count(*) filter (where website is not null and website != '')`,
@@ -976,9 +1004,9 @@ export function createServerApp() {
           await db.insert(fieldEvidence).values(evidenceBatch);
 
           const updateObj: any = { lastEnrichedAt: new Date(), enrichmentSource: 'SOCIAL_MEDIA' };
-          if (socialResult.socialUrl) {
-            updateObj.website = socialResult.socialUrl;
-            updateObj.websiteStatus = 'social_profile';
+          if (socialResult.discoveredWebsite && !lead.website) {
+            updateObj.website = socialResult.discoveredWebsite;
+            updateObj.websiteStatus = 'verified';
             updateObj.websiteConfidence = 'HIGH';
           }
           if (!lead.phone && socialResult.phone) updateObj.phone = socialResult.phone;

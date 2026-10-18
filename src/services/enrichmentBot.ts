@@ -2,6 +2,9 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import https from 'https';
 import { logger } from '../lib/monitoring.ts';
+import { SocialEnrichmentService } from './socialEnrichmentService.ts';
+import { IdentityService } from './identityService.ts';
+import { ScraplingService } from './scraplingService.ts';
 
 export interface EnrichedData {
   phone?: string;
@@ -43,7 +46,103 @@ export class EnrichmentBot {
       return data;
     }
 
-    const permissiveAgent = new https.Agent({ rejectUnauthorized: false });
+    // Phase 1: High-Fidelity Stealth Crawl powered by D4Vinci/Scrapling Repository
+    try {
+      const scraplingResult = await ScraplingService.crawl(url);
+      if (scraplingResult.success && scraplingResult.data) {
+        const scData = scraplingResult.data;
+        if (scData.isParked) {
+          logger.warn('ENRICHMENT', `Scrapling detected parked/broker domain: ${url}`);
+          return data;
+        }
+
+        if (scData.phones?.length) {
+          data.allPhones = scData.phones;
+          data.phone = scData.phones[0];
+          data.evidence.push({
+            field: 'phone',
+            value: data.phone,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.emails?.length) {
+          data.allEmails = scData.emails;
+          data.email = scData.emails[0];
+          data.evidence.push({
+            field: 'email',
+            value: data.email,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.whatsapp) {
+          data.whatsapp = scData.whatsapp;
+          data.evidence.push({
+            field: 'whatsapp',
+            value: data.whatsapp,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.socialLinks && Object.keys(scData.socialLinks).length > 0) {
+          data.socialLinks = { ...scData.socialLinks };
+          Object.entries(scData.socialLinks).forEach(([platform, pUrl]) => {
+            data.evidence.push({
+              field: platform,
+              value: pUrl,
+              url: scData.finalUrl || url,
+              method: 'SCRAPLING_STEALTH_CRAWL',
+              confidence: 'HIGH'
+            });
+          });
+        }
+
+        if (scData.legal?.siret) {
+          data.siretOrVat = scData.legal.siret;
+          data.evidence.push({
+            field: 'siret',
+            value: scData.legal.siret,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.legal?.manager) {
+          data.managerName = scData.legal.manager;
+          data.evidence.push({
+            field: 'manager',
+            value: scData.legal.manager,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.title) {
+          data.tagline = scData.title;
+        }
+
+        // If Scrapling found comprehensive data (both phone and email or legal), return early
+        if (data.phone && (data.email || data.siretOrVat || data.managerName)) {
+          return data;
+        }
+      }
+    } catch (scErr: any) {
+      logger.warn('SCRAPLING', `Scrapling non-fatal fallback: ${scErr.message}`);
+    }
+
+    const permissiveAgent = new https.Agent({ 
+      rejectUnauthorized: false, 
+      checkServerIdentity: () => undefined 
+    });
     const visited = new Set<string>();
 
     const fetchPage = async (pageUrl: string) => {
@@ -74,6 +173,12 @@ export class EnrichmentBot {
       visited.add(url);
       const homeResult = await fetchPage(url);
       if (!homeResult) return data;
+
+      // Reject parked or for-sale domains (do not scrape domain broker contact info)
+      if (IdentityService.isParkedOrBrokerDomain(homeResult.html, url)) {
+        logger.warn('ENRICHMENT', `Parked or broker domain skipped: ${url}`);
+        return data;
+      }
 
       const $home = cheerio.load(homeResult.html);
       this.extractInfo($home, url, data);
@@ -241,7 +346,7 @@ export class EnrichmentBot {
       }
     }
 
-    // 8. Social Media Profile Links
+    // 8. Social Media Profile Links (Strict Validation: Reject homepages, generic share widgets)
     $('a').each((_, el) => {
       const href = $(el).attr('href');
       if (!href) return;
@@ -249,33 +354,33 @@ export class EnrichmentBot {
       try {
         const lowerHref = href.toLowerCase();
         
-        if (lowerHref.includes('facebook.com/') && !lowerHref.includes('/sharer') && !lowerHref.includes('/dialog')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.facebook) {
+        if (lowerHref.includes('facebook.com') && !data.socialLinks.facebook) {
+          const cleanUrl = SocialEnrichmentService.normalizeFacebookUrl(href);
+          if (cleanUrl) {
             data.socialLinks.facebook = cleanUrl;
             data.evidence.push({ field: 'facebook', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
           }
         }
 
-        if (lowerHref.includes('instagram.com/') && !lowerHref.includes('/p/') && !lowerHref.includes('/explore/')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.instagram) {
+        if (lowerHref.includes('instagram.com') && !data.socialLinks.instagram) {
+          const cleanUrl = SocialEnrichmentService.normalizeInstagramUrl(href);
+          if (cleanUrl) {
             data.socialLinks.instagram = cleanUrl;
             data.evidence.push({ field: 'instagram', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
           }
         }
 
-        if (lowerHref.includes('linkedin.com/company/') || lowerHref.includes('linkedin.com/in/')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.linkedin) {
+        if (lowerHref.includes('linkedin.com') && !data.socialLinks.linkedin) {
+          const cleanUrl = SocialEnrichmentService.normalizeLinkedInUrl(href);
+          if (cleanUrl) {
             data.socialLinks.linkedin = cleanUrl;
             data.evidence.push({ field: 'linkedin', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
           }
         }
 
-        if ((lowerHref.includes('twitter.com/') || lowerHref.includes('x.com/')) && !lowerHref.includes('/intent')) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.twitter) {
+        if ((lowerHref.includes('twitter.com') || lowerHref.includes('x.com')) && !data.socialLinks.twitter) {
+          const cleanUrl = SocialEnrichmentService.normalizeTwitterUrl(href);
+          if (cleanUrl) {
             data.socialLinks.twitter = cleanUrl;
             data.evidence.push({ field: 'twitter', value: cleanUrl, url, method: 'page link', confidence: 'HIGH' });
           }

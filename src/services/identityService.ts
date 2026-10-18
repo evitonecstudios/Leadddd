@@ -67,6 +67,48 @@ export class IdentityService {
   }
 
   /**
+   * Detects parked, expired, or for-sale domains (e.g. GoDaddy auctions, Sedo, Dan, DomainMarket)
+   */
+  static isParkedOrBrokerDomain(html: string, url?: string): boolean {
+    const lower = (html || '').toLowerCase();
+    const urlLower = (url || '').toLowerCase();
+
+    // Check URL signatures
+    const brokerUrls = ['domainmarket.com', 'sedo.com', 'dan.com', 'afternic.com', 'hugedomains.com', 'parkingcrew', 'bodis.com', 'godaddy.com/domainsearch'];
+    if (brokerUrls.some(b => urlLower.includes(b))) return true;
+
+    // Check page text signatures
+    const parkedSignatures = [
+      'buy this domain',
+      'domain for sale',
+      'this domain is for sale',
+      'domain is available for purchase',
+      'domain available for sale',
+      'domain name is for sale',
+      'inquire about this domain',
+      'make an offer on this domain',
+      'the domain is registered without website content',
+      'is parked with',
+      'parked free, courtesy of',
+      'domainmarket.com',
+      'afternic.com',
+      'hugedomains.com',
+      'godaddy auctions',
+      'namecheap parking',
+      'parkingcrew.net',
+      'bodis.com',
+      'sav.com',
+      'ce domaine est en vente',
+      'ce nom de domaine est à vendre',
+      'domaine à vendre',
+      'acheter ce nom de domaine',
+      'acheter ce domaine'
+    ];
+
+    return parkedSignatures.some(sig => lower.includes(sig));
+  }
+
+  /**
    * Deterministic check for website identity using page HTML content.
    * Matches company name tokens, phone, and city in title, headers, and footer.
    */
@@ -74,9 +116,19 @@ export class IdentityService {
     html: string, 
     companyName: string, 
     phone?: string, 
-    city?: string
+    city?: string,
+    url?: string
   ): { match: boolean; confidence: 'VERIFIED' | 'HIGH' | 'MEDIUM' | 'LOW'; score: number; evidence: string } {
     try {
+      if (this.isParkedOrBrokerDomain(html, url)) {
+        return {
+          match: false,
+          confidence: 'LOW',
+          score: 0,
+          evidence: 'Parked / For-Sale domain detected (Domain Broker)'
+        };
+      }
+
       const $ = cheerio.load(html);
       const title = $('title').text().toLowerCase();
       const metaDesc = $('meta[name="description"]').attr('content')?.toLowerCase() || '';
