@@ -1,4 +1,4 @@
-import { LeadSource } from './types.ts';
+import type { LeadSource } from './types.ts';
 import { CSVSource } from './csvSource.ts';
 import { OSMSource } from './osmSource.ts';
 

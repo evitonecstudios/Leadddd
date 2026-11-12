@@ -12,11 +12,15 @@ export const requireAuth = async (
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const queryToken = req.path === '/leads/export' && typeof req.query.token === 'string'
+    ? req.query.token
+    : null;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.split('Bearer ')[1] : queryToken;
+
+  if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
-  const token = authHeader.split('Bearer ')[1];
   try {
     const decodedToken = await adminAuth.verifyIdToken(token);
     req.user = decodedToken;

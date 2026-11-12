@@ -9,6 +9,7 @@ export interface RawLead {
   city?: string;
   address?: string;
   phone?: string;
+  whatsapp?: string;
   email?: string;
   website?: string;
   latitude?: number;

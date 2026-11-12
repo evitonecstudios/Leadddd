@@ -11,12 +11,14 @@ const queryCache = new Map<string, { leads: RawLead[]; timestamp: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
 export class OSMSource implements LeadSource {
-  private overpassUrls = [
-    'https://lz4.overpass-api.de/api/interpreter',
+  private globalOverpassUrls = [
+    'https://overpass.openstreetmap.fr/api/interpreter',
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
-    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+    'https://overpass.private.coffee/api/interpreter',
+    'https://lz4.overpass-api.de/api/interpreter'
   ];
+  private swissOverpassUrl = 'https://overpass.osm.ch/api/interpreter';
 
   async search(criteria: { 
     country?: string; 
@@ -93,7 +95,14 @@ export class OSMSource implements LeadSource {
       let attemptCount = 0;
       let lastError: any = null;
 
-      for (const endpoint of this.overpassUrls) {
+      const locLower = `${country || ''} ${city || ''}`.toLowerCase();
+      const isSwitzerland = locLower.includes('switz') || locLower.includes('suisse') ||
+        ['geneve', 'genève', 'geneva', 'lausanne', 'zurich', 'zürich', 'bale', 'bâle', 'basel', 'berne', 'bern', 'neuchatel', 'neuchâtel', 'fribourg', 'lugano'].some(c => locLower.includes(c));
+      const endpointsToTry = isSwitzerland
+        ? [this.swissOverpassUrl, ...this.globalOverpassUrls]
+        : this.globalOverpassUrls;
+
+      for (const endpoint of endpointsToTry) {
         attemptCount++;
         try {
           response = await axios.post(endpoint, 'data=' + encodeURIComponent(query), {
@@ -102,10 +111,14 @@ export class OSMSource implements LeadSource {
               'User-Agent': 'LeadForge-Discovery/2.5',
               'Referer': 'https://leadforge.app/'
             },
-            timeout: 11000
+            timeout: 8500
           });
           
-          if (response?.data?.elements) {
+          if (Array.isArray(response?.data?.elements)) {
+            // Never stop early on an empty response from the regional Swiss mirror
+            if (endpoint === this.swissOverpassUrl && response.data.elements.length === 0) {
+              continue;
+            }
             if (attemptCount > 1) {
               await metrics.record('SOURCE', 'OSM', 'RETRY_SUCCESS', Date.now() - startTime, { criteria, endpoint, attemptCount });
             } else {
@@ -127,7 +140,7 @@ export class OSMSource implements LeadSource {
           }, 'OSM_API');
 
           // Rapid failover
-          await new Promise(resolve => setTimeout(resolve, 300));
+          await new Promise(resolve => setTimeout(resolve, 200));
         }
       }
 
@@ -191,8 +204,9 @@ export class OSMSource implements LeadSource {
         }
 
         const hasDirectContact = Boolean(phone || cleanOfficialWebsite || email || normalizedFb || normalizedInsta);
-        // Only real actionable businesses with direct contact information (Phone, Website, Email, or Social)
-        if (!hasDirectContact) {
+        const hasPhysicalPresence = Boolean((address && address.length >= 3) || (lat && lon));
+        // Actionable businesses: must have either direct contact channels or verified physical establishment
+        if (!hasDirectContact && !hasPhysicalPresence) {
           continue;
         }
 
@@ -202,14 +216,16 @@ export class OSMSource implements LeadSource {
         if (normalizedLi) validSocialLinks.linkedin = normalizedLi;
         if (normalizedTw) validSocialLinks.twitter = normalizedTw;
 
+        const resolvedCity = tags['addr:city'] || tags['addr:town'] || tags['addr:village'] || city;
         results.push({
           source: 'osm',
           sourceId: `${el.type}/${el.id}`,
           sourceUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
           companyName: tags.name,
           category: tags.shop || tags.amenity || tags.office || tags.craft || category,
-          city: tags['addr:city'] || city,
-          address: address || undefined,
+          country: tags['addr:country'] || country,
+          city: resolvedCity,
+          address: address || (resolvedCity ? `${resolvedCity}${country ? `, ${country}` : ''}` : undefined),
           phone: phone,
           website: cleanOfficialWebsite,
           email: email,
@@ -258,52 +274,154 @@ export class OSMSource implements LeadSource {
   public async searchNominatim(category: string, city?: string, country?: string, limit: number = 50): Promise<RawLead[]> {
     const loc = [city, country].filter(Boolean).join(' ').trim();
     const cleanCat = category.trim();
-    const queries = [
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanCat + ' ' + loc)}&format=json&addressdetails=1&limit=${limit}`,
-      `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city || loc)}&amenity=${encodeURIComponent(cleanCat)}&format=json&addressdetails=1&limit=${limit}`,
-      `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city || loc)}&shop=${encodeURIComponent(cleanCat)}&format=json&addressdetails=1&limit=${limit}`,
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanCat + ' in ' + (city || loc))}&format=json&addressdetails=1&limit=${limit}`
-    ];
-
     const leads: RawLead[] = [];
     const seenNames = new Set<string>();
 
-    for (const q of queries) {
-      if (leads.length >= limit) break;
+    // 1. Primary Nominatim query with extratags=1 to get phone, website, email, facebook
+    try {
+      const primaryQuery = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanCat + ' in ' + loc)}&format=json&addressdetails=1&extratags=1&limit=${Math.min(limit, 50)}`;
+      const res = await axios.get(primaryQuery, {
+        headers: { 
+          'User-Agent': 'LeadForge-Prospecting-Engine/3.0 (https://leadforge.app; contact@leadforge.app)',
+          'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7'
+        },
+        timeout: 4500
+      });
+
+      if (Array.isArray(res.data) && res.data.length > 0) {
+        for (const item of res.data) {
+          const name = item.name || (item.display_name ? item.display_name.split(',')[0].trim() : null);
+          if (!name || ValidationService.isInvalidBusinessName(name) || seenNames.has(name.toLowerCase())) continue;
+          const tags = item.extratags || {};
+          if (ChainFilter.isChainOrMajorBrand(tags, name)) continue;
+          seenNames.add(name.toLowerCase());
+
+          const addr = item.address || {};
+          const street = [addr.house_number, addr.road].filter(Boolean).join(' ');
+          const resolvedCity = addr.city || addr.town || addr.village || city;
+          const address = [street, addr.postcode, resolvedCity].filter(Boolean).join(', ');
+
+          const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile;
+          const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : undefined;
+          const rawWeb = tags.website || tags['contact:website'] || tags.url || tags['contact:url'];
+          const cleanWeb = rawWeb && !ValidationService.isSocialOrDirectoryUrl(rawWeb) ? rawWeb.trim() : undefined;
+          const rawEmail = tags.email || tags['contact:email'];
+          const email = rawEmail && ValidationService.validateEmail(String(rawEmail)) ? String(rawEmail).trim().toLowerCase() : undefined;
+
+          const socialLinks: Record<string, string> = {};
+          const fb = SocialEnrichmentService.normalizeFacebookUrl(tags['contact:facebook'] || tags.facebook || (rawWeb?.includes('facebook.com') ? rawWeb : undefined));
+          const insta = SocialEnrichmentService.normalizeInstagramUrl(tags['contact:instagram'] || tags.instagram || (rawWeb?.includes('instagram.com') ? rawWeb : undefined));
+          if (fb) socialLinks.facebook = fb;
+          if (insta) socialLinks.instagram = insta;
+
+          leads.push({
+            source: 'osm',
+            sourceId: `nominatim/${item.osm_type || 'node'}/${item.osm_id}`,
+            sourceUrl: `https://www.openstreetmap.org/${item.osm_type || 'node'}/${item.osm_id}`,
+            companyName: name,
+            category: addr.shop || addr.amenity || addr.office || addr.craft || category,
+            country: addr.country || country,
+            city: resolvedCity,
+            address: address || item.display_name || undefined,
+            phone,
+            website: cleanWeb,
+            email,
+            latitude: parseFloat(item.lat),
+            longitude: parseFloat(item.lon),
+            rawData: { ...item, tags, socialLinks, openingHours: tags.opening_hours }
+          });
+
+          if (leads.length >= limit) break;
+        }
+      }
+    } catch (err: any) {
+      if (err.response?.status !== 429) {
+        console.info(`Nominatim query notice: ${err.message}. Switching to Photon OSM mirror.`);
+      }
+    }
+
+    // 2. If under limit, query Photon OSM API + batch-enrich tags via Overpass ID lookup
+    if (leads.length < limit) {
       try {
-        const res = await axios.get(q, {
-          headers: { 'User-Agent': 'LeadForge-Discovery/2.5' },
-          timeout: 6000
+        const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanCat + ' ' + loc)}&limit=${Math.min(limit, 50)}`;
+        const pRes = await axios.get(photonUrl, {
+          headers: { 'Accept': 'application/json' },
+          timeout: 3500
         });
 
-        if (Array.isArray(res.data)) {
-          for (const item of res.data) {
-            const name = item.name || (item.display_name ? item.display_name.split(',')[0].trim() : null);
-            if (!name || ValidationService.isInvalidBusinessName(name) || seenNames.has(name.toLowerCase())) continue;
-            seenNames.add(name.toLowerCase());
+        const features = pRes.data?.features || [];
+        // Batch fetch full OSM tags for Photon features via Overpass.fr
+        const nodeIds = features.filter((f: any) => f.properties?.osm_type === 'N' && f.properties?.osm_id).map((f: any) => f.properties.osm_id);
+        const wayIds = features.filter((f: any) => f.properties?.osm_type === 'W' && f.properties?.osm_id).map((f: any) => f.properties.osm_id);
+        const tagMap = new Map<string, Record<string, any>>();
 
-            const addr = item.address || {};
-            const street = [addr.house_number, addr.road].filter(Boolean).join(' ');
-            const address = [street, addr.postcode, addr.city || addr.town || addr.village].filter(Boolean).join(', ');
-
-            leads.push({
-              source: 'osm',
-              sourceId: `nominatim/${item.osm_type || 'node'}/${item.osm_id}`,
-              sourceUrl: `https://www.openstreetmap.org/${item.osm_type || 'node'}/${item.osm_id}`,
-              companyName: name,
-              category: addr.shop || addr.amenity || addr.office || addr.craft || category,
-              city: addr.city || addr.town || addr.village || city,
-              address: address || item.display_name || undefined,
-              latitude: parseFloat(item.lat),
-              longitude: parseFloat(item.lon),
-              rawData: item
+        if (nodeIds.length > 0 || wayIds.length > 0) {
+          try {
+            const idParts: string[] = [];
+            if (nodeIds.length > 0) idParts.push(`node(id:${nodeIds.join(',')});`);
+            if (wayIds.length > 0) idParts.push(`way(id:${wayIds.join(',')});`);
+            const idQuery = `[out:json][timeout:8];(${idParts.join('')});out tags;`;
+            const ovRes = await axios.post(this.globalOverpassUrls[0], 'data=' + encodeURIComponent(idQuery), {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'LeadForge-Discovery/2.5' },
+              timeout: 4500
             });
-
-            if (leads.length >= limit) break;
-          }
+            for (const el of ovRes.data?.elements || []) {
+              const prefix = el.type === 'node' ? 'N' : el.type === 'way' ? 'W' : 'R';
+              if (el.tags) tagMap.set(`${prefix}/${el.id}`, el.tags);
+            }
+          } catch {}
         }
-      } catch (e: any) {
-        console.warn('Single Nominatim query failed:', e.message);
+
+        for (const f of features) {
+          const p = f.properties || {};
+          const name = p.name;
+          if (!name || ValidationService.isInvalidBusinessName(name) || seenNames.has(name.toLowerCase())) continue;
+          if (p.osm_key === 'place' || p.osm_key === 'boundary' || p.osm_key === 'highway' || p.type === 'city' || p.type === 'administrative') continue;
+          if (city && name.toLowerCase() === city.toLowerCase()) continue;
+
+          const tags = tagMap.get(`${p.osm_type}/${p.osm_id}`) || {};
+          if (ChainFilter.isChainOrMajorBrand(tags, name)) continue;
+          seenNames.add(name.toLowerCase());
+
+          const street = [p.housenumber, p.street].filter(Boolean).join(' ');
+          const resolvedCity = p.city || p.district || city;
+          const address = [street, p.postcode, resolvedCity].filter(Boolean).join(', ');
+          const coords = f.geometry?.coordinates || [];
+
+          const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile;
+          const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : undefined;
+          const rawWeb = tags.website || tags['contact:website'] || tags.url || tags['contact:url'];
+          const cleanWeb = rawWeb && !ValidationService.isSocialOrDirectoryUrl(rawWeb) ? rawWeb.trim() : undefined;
+          const rawEmail = tags.email || tags['contact:email'];
+          const email = rawEmail && ValidationService.validateEmail(String(rawEmail)) ? String(rawEmail).trim().toLowerCase() : undefined;
+
+          const socialLinks: Record<string, string> = {};
+          const fb = SocialEnrichmentService.normalizeFacebookUrl(tags['contact:facebook'] || tags.facebook || (rawWeb?.includes('facebook.com') ? rawWeb : undefined));
+          const insta = SocialEnrichmentService.normalizeInstagramUrl(tags['contact:instagram'] || tags.instagram || (rawWeb?.includes('instagram.com') ? rawWeb : undefined));
+          if (fb) socialLinks.facebook = fb;
+          if (insta) socialLinks.instagram = insta;
+
+          leads.push({
+            source: 'osm',
+            sourceId: `photon/${p.osm_type || 'N'}/${p.osm_id || Math.floor(Math.random() * 1000000)}`,
+            sourceUrl: p.osm_id ? `https://www.openstreetmap.org/${p.osm_type === 'W' ? 'way' : 'node'}/${p.osm_id}` : `https://www.openstreetmap.org/`,
+            companyName: name,
+            category: p.osm_value || category,
+            country: p.country || country,
+            city: resolvedCity,
+            address: address || (p.city ? `${p.city}, ${p.country || ''}` : undefined),
+            phone,
+            website: cleanWeb,
+            email,
+            latitude: coords[1] ? parseFloat(coords[1]) : undefined,
+            longitude: coords[0] ? parseFloat(coords[0]) : undefined,
+            rawData: { ...f, tags, socialLinks, openingHours: tags.opening_hours }
+          });
+
+          if (leads.length >= limit) break;
+        }
+      } catch (photonErr: any) {
+        // Non-critical fallback
       }
     }
 

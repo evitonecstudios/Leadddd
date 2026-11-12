@@ -1,6 +1,6 @@
 import { db } from '../db/index.ts';
 import { leads, fieldEvidence } from '../db/schema.ts';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne, isNull } from 'drizzle-orm';
 import { SocialEnrichmentService } from './socialEnrichmentService.ts';
 import { ChainFilter } from './sources/chainFilter.ts';
 
@@ -149,7 +149,9 @@ export class ValidationService {
     if (!/[a-zA-Z\u00C0-\u024F]/.test(trimmed)) return true;
 
     const lower = trimmed.toLowerCase();
-    const genericBlocked = [
+
+    // 1. Non-commercial municipal/infrastructure objects (block exact or prefix)
+    const nonCommercialInfrastructure = [
       'unnamed', 'unknown', 'n/a', 'sans nom', 'point of interest', 'parking', 'abri bus', 'abribus', 'bus stop',
       'toilettes', 'toilet', 'wc', 'poste', 'boite aux lettres', 'post box', 'distributeur',
       'atm', 'substation', 'borne de recharge', 'recycling', 'poubelle', 'banc', 'bench',
@@ -157,17 +159,39 @@ export class ValidationService {
       'chantier', 'batiment', 'building', 'residential', 'maison', 'residence', 'immeuble',
       'arret', 'gare', 'station service', 'station essence', 'lavoir', 'eglise', 'mairie',
       'salle des fetes', 'decheterie', 'poste de transformation', 'zone artisanale', 'rond-point',
-      'taulier', 'phone store', 'magasin de téléphonie mobile', 'magasin', 'store', 'shop',
-      'boutique', 'boulangerie', 'restaurant', 'plombier', 'coiffeur', 'barbier', 'garage',
-      'epicerie', 'épicerie', 'bar', 'café', 'cafe', 'atelier', 'cabinet', 'bureau',
       'u1 prospect', 'u2 prospect', 'pipeline test', 'audit test target', 'test persistence inc'
     ];
-    if (genericBlocked.some(b => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower.startsWith(b + ' ') || lower.endsWith(' ' + b))) {
+
+    if (nonCommercialInfrastructure.some(b => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower.startsWith(b + ' ') || lower.endsWith(' ' + b))) {
       return true;
     }
-    if (/^\d+\s+(rue|avenue|boulevard|chemin|allee|route|place|str\.|strasse|gasse|street|road|ave)/i.test(lower)) {
+
+    // 2. Pure generic category words ALONE with no trade name (e.g. user or OSM node just entered "boulangerie" or "restaurant")
+    const genericCategoryAlone = [
+      'magasin', 'store', 'shop', 'boutique', 'boulangerie', 'restaurant', 'plombier', 
+      'coiffeur', 'barbier', 'garage', 'epicerie', 'épicerie', 'bar', 'café', 'cafe', 
+      'atelier', 'cabinet', 'bureau', 'dentiste', 'pharmacie', 'taulier', 'phone store'
+    ];
+    if (genericCategoryAlone.some(b => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower === `l'${b}` || lower === `les ${b}`)) {
       return true;
     }
+
+    // 3. Pure street address or thoroughfare name entered as business name alone (e.g. "12 rue de Rivoli", "Rue Bonaparte", "Avenue Bosquet")
+    if (/^(\d+\s+)?(rue|avenue|boulevard|bd|chemin|allee|allée|route|place|quai|cours|square|impasse|passage|chaussée|chaussee|str\.|strasse|gasse|street|road|ave)\s+/i.test(lower)) {
+      return true;
+    }
+
+    // 4. Filter mock/synthetic company placeholders
+    if (
+      lower.includes('boulangerie traditionnelle du marché') || 
+      lower.includes('cabinet dentaire saint-germain') ||
+      lower.includes('synthetic') ||
+      lower.includes('dummy target') ||
+      lower.includes('test persistence')
+    ) {
+      return true;
+    }
+
     return false;
   }
 
@@ -186,19 +210,25 @@ export class ValidationService {
     if (this.isInvalidBusinessName(data.companyName)) return false;
     if (ChainFilter.isChainOrMajorBrand(data.rawData?.tags || {}, data.companyName)) return false;
 
-    // Must have a real valid city and physical street address
-    if (!data.city || data.city.trim().length < 2) return false;
-    if (!data.address || data.address.trim().length < 5) return false;
+    // Must have a city or country or coordinates
+    const hasLocation = Boolean(
+      (data.city && data.city.trim().length >= 2) || 
+      (data.address && data.address.trim().length >= 3) || 
+      (data.latitude && data.longitude)
+    );
+    if (!hasLocation) return false;
 
     const hasPhone = Boolean(data.phone && this.validatePhone(data.phone));
     const hasWebsite = Boolean(data.website && data.website.trim().length >= 4 && !this.isSocialOrDirectoryUrl(data.website));
     const hasEmail = Boolean(data.email && this.validateEmail(data.email));
+    const hasSocial = Boolean(data.rawData?.socialLinks && Object.values(data.rawData.socialLinks).some(Boolean));
+    const hasWhatsApp = Boolean(data.whatsapp || (data.notes && data.notes.includes('WhatsApp')));
 
-    // Must have a verified phone number
-    if (!hasPhone) return false;
+    // If contact is present or if location coordinates are confirmed for local business
+    const hasContact = hasPhone || hasWebsite || hasEmail || hasSocial || hasWhatsApp;
+    const hasValidCoordinates = Boolean(data.latitude && data.longitude);
 
-    // Must have verified website or confirmed email
-    if (!hasWebsite && !hasEmail) return false;
+    if (!hasContact && !hasValidCoordinates) return false;
 
     return true;
   }
@@ -206,7 +236,8 @@ export class ValidationService {
   static hasValidContact(data: any): boolean {
     const hasPhone = Boolean(data.phone && this.validatePhone(data.phone));
     const hasEmail = Boolean(data.email && this.validateEmail(data.email));
-    return hasPhone || hasEmail;
+    const hasWhatsApp = Boolean(data.whatsapp || (data.notes && data.notes.includes('WhatsApp')));
+    return hasPhone || hasEmail || hasWhatsApp;
   }
 }
 
@@ -216,8 +247,10 @@ export class LeadService {
       return { lead: null, status: 'rejected_unverified' as const };
     }
 
-    // Always ensure it is a complete, strictly verified business (address + city + phone + website)
-    if (!ValidationService.isVerifiedBusiness(data)) {
+    // Default requireVerifiedContact to true if not specified
+    const mustBeVerified = options?.requireVerifiedContact !== false;
+
+    if (mustBeVerified && !ValidationService.isVerifiedBusiness(data)) {
       return { lead: null, status: 'rejected_unverified' as const };
     }
 
@@ -226,27 +259,35 @@ export class LeadService {
     const normalizedPhone = NormalizationService.normalizePhone(data.phone);
     const displayPhone = NormalizationService.formatDisplayPhone(data.phone, data.country);
 
-    // Multi-factor Deduplication
+    // Ensure address is never empty if city or country is available
+    let finalAddress = (data.address || '').trim();
+    if (!finalAddress || finalAddress.length < 3) {
+      finalAddress = [data.city, data.country].filter(Boolean).join(', ');
+    }
+
+    // Multi-factor Deduplication (ignore soft-deleted and UNQUALIFIED rows)
     let existingLead: any = null;
+    const baseActiveCond = [isNull(leads.deletedAt), ne(leads.leadStatus, 'UNQUALIFIED')];
 
     if (normalizedDomain) {
       existingLead = await db.query.leads.findFirst({
         where: campaignId 
-          ? and(eq(leads.campaignId, campaignId), eq(leads.normalizedDomain, normalizedDomain))
-          : eq(leads.normalizedDomain, normalizedDomain),
+          ? and(...baseActiveCond, eq(leads.campaignId, campaignId), eq(leads.normalizedDomain, normalizedDomain))
+          : and(...baseActiveCond, eq(leads.normalizedDomain, normalizedDomain)),
       });
     }
 
     if (!existingLead && normalizedPhone && normalizedPhone.length >= 7) {
       existingLead = await db.query.leads.findFirst({
         where: campaignId
-          ? and(eq(leads.campaignId, campaignId), eq(leads.normalizedPhone, normalizedPhone))
-          : eq(leads.normalizedPhone, normalizedPhone),
+          ? and(...baseActiveCond, eq(leads.campaignId, campaignId), eq(leads.normalizedPhone, normalizedPhone))
+          : and(...baseActiveCond, eq(leads.normalizedPhone, normalizedPhone)),
       });
     }
 
     if (!existingLead && normalizedName && (data.city || data.address)) {
       const conds = [
+        ...baseActiveCond,
         eq(leads.normalizedCompanyName, normalizedName),
         data.city ? eq(leads.city, data.city) : undefined,
         campaignId ? eq(leads.campaignId, campaignId) : undefined
@@ -265,12 +306,66 @@ export class LeadService {
     const isSocialOrDir = ValidationService.isSocialOrDirectoryUrl(rawWebsite);
     const hasWebsite = Boolean(rawWebsite && !isSocialOrDir);
 
+    // Collect notes for social profiles, WhatsApp, and opening hours so DB & UI filters find them directly
+    const noteLines: string[] = [];
+    if (data.notes && typeof data.notes === 'string' && data.notes.trim()) {
+      noteLines.push(data.notes.trim());
+    }
+
+    const socialMap: Record<string, string> = {};
+    if (isSocialOrDir && rawWebsite) {
+      const fb = SocialEnrichmentService.normalizeFacebookUrl(rawWebsite);
+      const insta = SocialEnrichmentService.normalizeInstagramUrl(rawWebsite);
+      const li = SocialEnrichmentService.normalizeLinkedInUrl(rawWebsite);
+      const tw = SocialEnrichmentService.normalizeTwitterUrl(rawWebsite);
+      if (fb) socialMap.facebook = fb;
+      else if (insta) socialMap.instagram = insta;
+      else if (li) socialMap.linkedin = li;
+      else if (tw) socialMap.twitter = tw;
+    }
+
+    if (data.rawData?.socialLinks && typeof data.rawData.socialLinks === 'object') {
+      for (const [platform, rawUrl] of Object.entries(data.rawData.socialLinks)) {
+        if (!rawUrl || typeof rawUrl !== 'string' || socialMap[platform]) continue;
+        let cleanUrl: string | null = null;
+        if (platform === 'facebook') cleanUrl = SocialEnrichmentService.normalizeFacebookUrl(rawUrl);
+        else if (platform === 'instagram') cleanUrl = SocialEnrichmentService.normalizeInstagramUrl(rawUrl);
+        else if (platform === 'linkedin') cleanUrl = SocialEnrichmentService.normalizeLinkedInUrl(rawUrl);
+        else if (platform === 'twitter') cleanUrl = SocialEnrichmentService.normalizeTwitterUrl(rawUrl);
+        if (cleanUrl) socialMap[platform] = cleanUrl;
+      }
+    }
+
+    if (socialMap.facebook && !noteLines.some(l => l.includes(socialMap.facebook))) {
+      noteLines.push(`Facebook: ${socialMap.facebook}`);
+    }
+    if (socialMap.instagram && !noteLines.some(l => l.includes(socialMap.instagram))) {
+      noteLines.push(`Instagram: ${socialMap.instagram}`);
+    }
+    if (socialMap.linkedin && !noteLines.some(l => l.includes(socialMap.linkedin))) {
+      noteLines.push(`LinkedIn: ${socialMap.linkedin}`);
+    }
+    if (socialMap.twitter && !noteLines.some(l => l.includes(socialMap.twitter))) {
+      noteLines.push(`Twitter: ${socialMap.twitter}`);
+    }
+
+    const rawWa = data.whatsapp || data.rawData?.tags?.['contact:whatsapp'] || data.rawData?.tags?.whatsapp;
+    if (rawWa) {
+      noteLines.push(`WhatsApp: ${String(rawWa).trim()}`);
+    }
+    if (data.rawData?.openingHours) {
+      noteLines.push(`Hours: ${data.rawData.openingHours}`);
+    }
+
+    const initialNotes = noteLines.length > 0 ? noteLines.join('\n') : null;
+    const hasSocialOnly = !hasWebsite && Object.keys(socialMap).length > 0;
+
     const qualityReport = NormalizationService.computeDataQuality({
       phone: displayPhone || data.phone,
       website: hasWebsite ? rawWebsite : null,
       email: data.email,
-      address: data.address,
-      notes: data.notes,
+      address: finalAddress,
+      notes: initialNotes,
       rawData: data.rawData
     });
 
@@ -283,7 +378,7 @@ export class LeadService {
       country: data.country,
       region: data.region,
       city: data.city,
-      address: data.address,
+      address: finalAddress,
       latitude: data.latitude,
       longitude: data.longitude,
       phone: displayPhone || data.phone,
@@ -296,11 +391,12 @@ export class LeadService {
       source: data.source || 'OpenStreetMap',
       sourceUrl: data.sourceUrl,
       discoverySource: data.source || 'OpenStreetMap',
-      websiteStatus: hasWebsite ? 'verified' : 'not_detected',
-      websiteConfidence: hasWebsite ? 'HIGH' : 'UNKNOWN',
+      websiteStatus: hasWebsite ? 'verified' : (hasSocialOnly ? 'social_profile' : 'not_detected'),
+      websiteConfidence: hasWebsite ? 'HIGH' : (hasSocialOnly ? 'MEDIUM' : 'UNKNOWN'),
       dataConfidence: qualityReport.confidence,
       opportunityScore: qualityReport.score,
-      leadStatus: 'NEW'
+      leadStatus: 'NEW',
+      notes: initialNotes
     }).returning();
 
     // Store Initial Field Evidence

@@ -130,10 +130,8 @@ export class EnrichmentBot {
           data.tagline = scData.title;
         }
 
-        // If Scrapling found comprehensive data (both phone and email or legal), return early
-        if (data.phone && (data.email || data.siretOrVat || data.managerName)) {
-          return data;
-        }
+        // Return immediately with Scrapling's high-fidelity extracted data
+        return data;
       }
     } catch (scErr: any) {
       logger.warn('SCRAPLING', `Scrapling non-fatal fallback: ${scErr.message}`);

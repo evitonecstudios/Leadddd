@@ -1,15 +1,16 @@
 import { db } from '../db/index.ts';
 import * as schema from '../db/schema.ts';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { SourceRegistry } from './sources/registry.ts';
-import { LeadService } from './leadService.ts';
-import { GridPartitionService, BoundingBox } from './gridPartitionService.ts';
+import { LeadService, NormalizationService, ValidationService } from './leadService.ts';
+import { GridPartitionService, type BoundingBox } from './gridPartitionService.ts';
 import { IdentityService } from './identityService.ts';
 import { EnrichmentBot } from './enrichmentBot.ts';
 import { SearchProviderFactory } from './search/types.ts';
 import { WebsiteService } from './websiteService.ts';
 import { OpportunityService } from './opportunityService.ts';
 import { SocialEnrichmentService } from './socialEnrichmentService.ts';
+import { analyzePhoneNumber } from '../lib/phoneUtils.ts';
 import { logger, metrics } from '../lib/monitoring.ts';
 
 export class JobService {
@@ -59,6 +60,29 @@ export class JobService {
     return this.runLeadGeneration(jobId, sourceId, criteria, campaignId, true);
   }
 
+  private static async deleteUnmatchedLead(leadId: number) {
+    try {
+      await db.delete(schema.fieldEvidence).where(eq(schema.fieldEvidence.leadId, leadId));
+      await db.delete(schema.leads).where(eq(schema.leads.id, leadId));
+    } catch {}
+  }
+
+  private static matchesPreEnrichmentFilter(rawLead: any, criteria: any): boolean {
+    const hasOfficialWeb = Boolean(
+      rawLead.website && !ValidationService.isSocialOrDirectoryUrl(rawLead.website)
+    );
+
+    if (criteria.intentMode === 'NO_WEBSITE' || criteria.targetNoWebsite) {
+      if (hasOfficialWeb) return false;
+    }
+
+    if (criteria.intentMode === 'FACEBOOK_NO_WEBSITE') {
+      if (hasOfficialWeb) return false;
+    }
+
+    return true;
+  }
+
   static async runLeadGeneration(jobId: number, sourceId: string, criteria: any, campaignId?: number, isResume: boolean = false) {
     const startTime = Date.now();
     try {
@@ -68,6 +92,9 @@ export class JobService {
       const results = (job.results as any) || {};
       const targetCount = criteria.maxResults || criteria.limit || 50;
       results.target = targetCount;
+      results.validBusinesses = results.validBusinesses || 0;
+      results.newLeadsSaved = results.newLeadsSaved || 0;
+      results.totalFound = results.totalFound || 0;
 
       let cells: Array<BoundingBox | null> = [];
       const location = `${criteria.city || ''} ${criteria.country || ''}`.trim();
@@ -85,7 +112,7 @@ export class JobService {
       }
 
       results.cellsTotal = cells.length;
-      const startCellIdx = isResume ? (results.cellsCompleted || 0) : 0;
+      const resumeCellIdx = isResume ? (results.cellsCompleted || 0) : 0;
       if (!isResume) results.cellsCompleted = 0;
       await this.updateJobProgress(jobId, results.newLeadsSaved || 0, 'running', results);
 
@@ -103,35 +130,44 @@ export class JobService {
       }
 
       let expansionTier = 1;
-      const MAX_TIERS = 6;
+      const MAX_TIERS = 2;
 
       while (totalSaved < targetCount && expansionTier <= MAX_TIERS) {
         if (expansionTier > 1 && currentMasterBbox) {
-          const tierLabel = expansionTier === 2 ? 'métropolitaine' : expansionTier === 3 ? 'agglomération' : expansionTier === 4 ? 'départementale' : 'régionale';
-          results.currentStep = `Recherche en cours (${totalSaved}/${targetCount} prospects). Élargissement à la zone ${tierLabel}...`;
+          results.currentStep = `Recherche en cours (${totalSaved}/${targetCount} prospects). Élargissement à la périphérie locale...`;
           await this.updateJobProgress(jobId, totalSaved, 'running', results);
           
-          currentMasterBbox = GridPartitionService.expandBoundingBox(currentMasterBbox, 2.4);
-          const divisions = GridPartitionService.calculateDivisions(currentMasterBbox, targetCount);
+          currentMasterBbox = GridPartitionService.expandBoundingBox(currentMasterBbox, 1.6);
+          const divisions = Math.min(GridPartitionService.calculateDivisions(currentMasterBbox, targetCount), 3);
           cells = GridPartitionService.partition(currentMasterBbox, divisions);
           results.cellsTotal = cells.length;
           results.cellsCompleted = 0;
         }
 
+        const cellStartIdx = expansionTier === 1 ? Math.min(resumeCellIdx, Math.max(0, cells.length - 1)) : 0;
+
         // Phase 2. Controlled Cell Discovery
-        for (let cellIdx = startCellIdx; cellIdx < cells.length; cellIdx++) {
+        for (let cellIdx = cellStartIdx; cellIdx < cells.length; cellIdx++) {
           if (totalSaved >= targetCount) break;
 
           const cell = cells[cellIdx];
           results.currentCell = `Zone ${cellIdx + 1}/${cells.length} (Niveau ${expansionTier})`;
-          results.currentStep = `Extraction & qualification (${totalSaved}/${targetCount} prospects découverts)...`;
+          results.currentStep = `Extraction & qualification Scrapling (${totalSaved}/${targetCount} prospects)...`;
           await this.updateJobProgress(jobId, totalSaved, 'running', results);
 
           try {
             const needed = targetCount - totalSaved;
+            // Overpass query retrieves extra candidates when strict post-filters are active
+            const isStrictMode = Boolean(
+              criteria.intentMode === 'FACEBOOK_NO_WEBSITE' ||
+              criteria.intentMode === 'WHATSAPP' ||
+              criteria.intentMode === 'NO_WEBSITE' ||
+              criteria.requireWhatsApp
+            );
+            const fetchLimit = Math.min(Math.max(needed * (isStrictMode ? 4 : 2), 60), 200);
             const queryParams: any = { 
               ...criteria, 
-              limit: Math.min(Math.max(needed + 30, 80), 200) 
+              limit: fetchLimit
             };
             if (cell) queryParams.bbox = cell;
 
@@ -142,45 +178,53 @@ export class JobService {
               results.chainsFiltered = (results.chainsFiltered || 0) + (rawLeads[0] as any).rawData.chainsExcludedCount;
             }
 
-            // Process leads in concurrent batches of 4 for 400% speed increase
-            const BATCH_SIZE = 4;
-            for (let i = 0; i < rawLeads.length; i += BATCH_SIZE) {
+            // Pre-filter before spawning enrichment workers
+            const candidates = rawLeads.filter(r => this.matchesPreEnrichmentFilter(r, criteria));
+
+            // Process leads in concurrent batches of 12 for high-speed lead generation
+            const BATCH_SIZE = 12;
+            for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
               if (totalSaved >= targetCount) break;
-              const chunk = rawLeads.slice(i, i + BATCH_SIZE);
+              const chunk = candidates.slice(i, i + BATCH_SIZE);
 
               const chunkPromises = chunk.map(async (rawLead) => {
                 if (totalSaved >= targetCount) return null;
 
-                // High-Intent Targeting Filter: No Official Website
-                if (criteria.intentMode === 'NO_WEBSITE' || criteria.targetNoWebsite) {
-                  const hasOfficialWeb = rawLead.website && 
-                    !rawLead.website.includes('facebook.com') && 
-                    !rawLead.website.includes('instagram.com') && 
-                    !rawLead.website.includes('linkedin.com');
-                  if (hasOfficialWeb) {
-                    return null; // Skip businesses that already have custom websites
-                  }
-                }
-
-                // High-Intent Targeting Filter: Direct Callable Phone Required
-                if (criteria.intentMode === 'DIRECT_CALL' || criteria.requireDirectPhone) {
-                  if (!rawLead.phone || rawLead.phone.trim().length < 6) {
-                    return null; // Skip businesses without direct callable phone
-                  }
-                }
-
                 const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
-                  requireVerifiedContact: criteria.requireContactInfo !== false
+                  requireVerifiedContact: false 
                 });
 
                 if (status === 'created' && lead) {
-                  results.validBusinesses++;
-                  results.newLeadsSaved++;
-                  totalSaved++;
+                  // Concurrent Scrapling & Social Enrichment
+                  const enrichedState = await this.enrichLead(lead, results, criteria, rawLead.rawData);
 
-                  // Concurrent website & contact enrichment
-                  await this.enrichLead(lead, results);
-                  return lead;
+                  // Final check against user filters after Scrapling/Enrichment
+                  const isMatch = await this.checkLeadMatchesCriteria(lead.id, criteria);
+                  
+                  if (isMatch) {
+                    if (totalSaved >= targetCount) {
+                      await this.deleteUnmatchedLead(lead.id);
+                      return null;
+                    }
+                    results.validBusinesses++;
+                    results.newLeadsSaved++;
+                    totalSaved++;
+
+                    // Trigger opportunity analysis & website audit in background ONLY for qualified leads
+                    OpportunityService.analyzeLead(lead.id)
+                      .then(() => { results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1; })
+                      .catch(() => {});
+                    const activeWeb = enrichedState?.website || lead.website;
+                    if (activeWeb && !ValidationService.isSocialOrDirectoryUrl(activeWeb)) {
+                      WebsiteService.performAudit(lead.id, activeWeb)
+                        .then(() => { results.auditsCompleted = (results.auditsCompleted || 0) + 1; })
+                        .catch(() => {});
+                    }
+                    return lead;
+                  } else {
+                    await this.deleteUnmatchedLead(lead.id);
+                    return null;
+                  }
                 } else if (status === 'rejected_unverified') {
                   results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
                 } else {
@@ -190,10 +234,7 @@ export class JobService {
               });
 
               await Promise.allSettled(chunkPromises);
-
-              if (totalSaved % 2 === 0 || totalSaved >= targetCount) {
-                await this.updateJobProgress(jobId, totalSaved, 'running', results);
-              }
+              await this.updateJobProgress(jobId, totalSaved, 'running', results);
             }
 
             results.cellsCompleted = cellIdx + 1;
@@ -212,45 +253,51 @@ export class JobService {
         }
       }
 
-      // Secondary Wave: If still under target, run targeted multi-query Nominatim fallback
-      if (totalSaved < targetCount && (criteria.city || criteria.country) && criteria.category) {
-        results.currentStep = `Vague complémentaire de découverte pour atteindre ${targetCount} prospects...`;
+      // Secondary Wave: Only if Overpass yielded sparse raw candidates
+      if (totalSaved < targetCount && results.totalFound < targetCount && (criteria.city || criteria.country) && criteria.category) {
+        results.currentStep = `Vague complémentaire pour atteindre ${targetCount} prospects...`;
         await this.updateJobProgress(jobId, totalSaved, 'running', results);
 
         try {
           const needed = targetCount - totalSaved;
           const fallbackLeads = await (source as any).searchNominatim?.(criteria.category, criteria.city, criteria.country, needed + 15) || [];
+          const candidates = fallbackLeads.filter((r: any) => this.matchesPreEnrichmentFilter(r, criteria));
           
-          const BATCH_SIZE = 4;
-          for (let i = 0; i < fallbackLeads.length; i += BATCH_SIZE) {
+          const BATCH_SIZE = 12;
+          for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
             if (totalSaved >= targetCount) break;
-            const chunk = fallbackLeads.slice(i, i + BATCH_SIZE);
+            const chunk = candidates.slice(i, i + BATCH_SIZE);
 
             await Promise.allSettled(chunk.map(async (rawLead: any) => {
               if (totalSaved >= targetCount) return;
 
-              // High-Intent Targeting Filter
-              if (criteria.intentMode === 'NO_WEBSITE' || criteria.targetNoWebsite) {
-                const hasOfficialWeb = rawLead.website && 
-                  !rawLead.website.includes('facebook.com') && 
-                  !rawLead.website.includes('instagram.com') && 
-                  !rawLead.website.includes('linkedin.com');
-                if (hasOfficialWeb) return;
-              }
-              if (criteria.intentMode === 'DIRECT_CALL' || criteria.requireDirectPhone) {
-                if (!rawLead.phone || rawLead.phone.trim().length < 6) return;
-              }
-
               const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
-                requireVerifiedContact: criteria.requireContactInfo !== false
+                requireVerifiedContact: false
               });
               if (status === 'created' && lead) {
-                results.validBusinesses++;
-                results.newLeadsSaved++;
-                totalSaved++;
-                await this.enrichLead(lead, results);
+                const enrichedState = await this.enrichLead(lead, results, criteria, rawLead.rawData);
+                const isMatch = await this.checkLeadMatchesCriteria(lead.id, criteria);
+                if (isMatch && totalSaved < targetCount) {
+                  results.validBusinesses++;
+                  results.newLeadsSaved++;
+                  totalSaved++;
+
+                  OpportunityService.analyzeLead(lead.id)
+                    .then(() => { results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1; })
+                    .catch(() => {});
+                  const activeWeb = enrichedState?.website || lead.website;
+                  if (activeWeb && !ValidationService.isSocialOrDirectoryUrl(activeWeb)) {
+                    WebsiteService.performAudit(lead.id, activeWeb)
+                      .then(() => { results.auditsCompleted = (results.auditsCompleted || 0) + 1; })
+                      .catch(() => {});
+                  }
+                } else {
+                  await this.deleteUnmatchedLead(lead.id);
+                }
               } else if (status === 'rejected_unverified') {
                 results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
+              } else {
+                results.duplicates++;
               }
             }));
             await this.updateJobProgress(jobId, totalSaved, 'running', results);
@@ -272,62 +319,51 @@ export class JobService {
     }
   }
 
-  private static async enrichLead(lead: any, results: any) {
+  private static async enrichLead(
+    lead: any,
+    results: any,
+    criteria: any,
+    rawData?: any
+  ): Promise<{ website?: string | null }> {
     try {
       let website = lead.website;
-      let websiteSource = lead.source || 'OpenStreetMap';
 
-      // Phase F: Website Discovery if website is NULL
-      if (!website) {
-        const candidates = await SearchProviderFactory.findWebsites(lead.companyName, lead.city || '');
-        if (candidates.length > 0) {
-          results.websiteCandidates += candidates.length;
+      // Optional website discovery when website is missing in OSM and mode allows official websites
+      const disallowWebsiteDiscovery = Boolean(
+        criteria?.intentMode === 'NO_WEBSITE' ||
+        criteria?.intentMode === 'FACEBOOK_NO_WEBSITE' ||
+        criteria?.targetNoWebsite
+      );
 
-          // Deterministic identity matching against company name & location
-          for (const cand of candidates) {
-            const score = IdentityService.calculateRelevanceScore(lead.companyName, cand.url, lead.address, lead.city);
-            if (score >= 40) {
-              website = cand.url;
-              websiteSource = cand.source;
-              const confidence = IdentityService.getConfidence(score);
-              
-              await db.update(schema.leads).set({
-                website: cand.url,
-                websiteCandidate: cand.url,
-                websiteStatus: 'verified',
-                websiteConfidence: confidence,
-                enrichmentSource: cand.source
-              }).where(eq(schema.leads.id, lead.id));
+      if (!website && !disallowWebsiteDiscovery && (!lead.phone || !lead.email) && lead.companyName) {
+        try {
+          const candidates = await SearchProviderFactory.findWebsites(lead.companyName, lead.city || '');
+          const best = candidates
+            .map(c => ({ ...c, score: IdentityService.calculateRelevanceScore(lead.companyName, c.url, lead.address, lead.city) }))
+            .sort((a, b) => b.score - a.score)[0];
 
-              // Record evidence for discovered website
-              await db.insert(schema.fieldEvidence).values({
-                leadId: lead.id,
-                fieldName: 'website',
-                value: cand.url,
-                source: cand.source,
-                sourceUrl: cand.url,
-                verified: confidence === 'VERIFIED' || confidence === 'HIGH',
-                confidence: confidence === 'VERIFIED' ? 'HIGH' : confidence === 'HIGH' ? 'HIGH' : 'MEDIUM'
-              });
-
-              results.verifiedWebsites++;
-              break;
-            }
+          if (best && best.score >= 50 && !ValidationService.isSocialOrDirectoryUrl(best.url)) {
+            website = best.url;
+            results.websiteCandidates = (results.websiteCandidates || 0) + 1;
+            const normDomain = NormalizationService.normalizeDomain(website);
+            await db.update(schema.leads).set({
+              website,
+              normalizedDomain: normDomain,
+              websiteCandidate: website,
+              websiteStatus: 'verified',
+              websiteConfidence: 'MEDIUM'
+            }).where(eq(schema.leads.id, lead.id));
+            lead.website = website;
           }
-        }
-        if (!website) {
-          await db.update(schema.leads).set({
-            websiteStatus: 'not_detected',
-            websiteConfidence: 'LOW'
-          }).where(eq(schema.leads.id, lead.id));
-        }
-      } else {
-        // Website already provided by OSM - mark as verified candidate
-        results.verifiedWebsites++;
+        } catch {}
       }
 
-      // Phase G: Contact Enrichment via Deep Site Crawl
-      if (website && !website.includes('facebook.com') && !website.includes('instagram.com')) {
+      if (website) {
+        results.verifiedWebsites = (results.verifiedWebsites || 0) + 1;
+      }
+
+      // Phase G: High-Speed Contact Enrichment via Scrapling
+      if (website && !ValidationService.isSocialOrDirectoryUrl(website)) {
         const enriched = await EnrichmentBot.enrich(website);
         results.pagesCrawled = (results.pagesCrawled || 0) + 1;
 
@@ -336,7 +372,7 @@ export class JobService {
             leadId: lead.id,
             fieldName: e.field,
             value: e.value,
-            source: 'OFFICIAL_WEBSITE',
+            source: 'SCRAPLING_WEBSITE',
             sourceUrl: e.url,
             verified: e.confidence === 'HIGH',
             confidence: e.confidence
@@ -346,45 +382,84 @@ export class JobService {
 
           const updateObj: any = {
             lastEnrichedAt: new Date(),
-            enrichmentSource: 'OFFICIAL_WEBSITE'
+            enrichmentSource: 'SCRAPLING_WEBSITE'
           };
 
-          if (!lead.phone && enriched.phone) {
-            updateObj.phone = enriched.phone;
-            results.phonesFound = (results.phonesFound || 0) + 1;
+          // Pick best phone (prefer mobile if targeting WhatsApp)
+          let chosenPhone = enriched.phone;
+          if ((criteria?.intentMode === 'WHATSAPP' || criteria?.requireWhatsApp) && enriched.allPhones?.length) {
+            const mobileCand = enriched.allPhones.find(p => analyzePhoneNumber(p, lead.country).isWhatsAppReady);
+            if (mobileCand) chosenPhone = mobileCand;
           }
+
+          if ((!lead.phone || ((criteria?.intentMode === 'WHATSAPP' || criteria?.requireWhatsApp) && chosenPhone && analyzePhoneNumber(chosenPhone, lead.country).isWhatsAppReady && !analyzePhoneNumber(lead.phone, lead.country).isWhatsAppReady)) && chosenPhone) {
+            const formatted = NormalizationService.formatDisplayPhone(chosenPhone, lead.country) || chosenPhone;
+            updateObj.phone = formatted;
+            updateObj.normalizedPhone = NormalizationService.normalizePhone(chosenPhone);
+            if (!lead.phone) results.phonesFound = (results.phonesFound || 0) + 1;
+            lead.phone = formatted;
+          }
+
           if (!lead.email && enriched.email) {
             updateObj.email = enriched.email;
             results.emailsFound = (results.emailsFound || 0) + 1;
+            lead.email = enriched.email;
           }
+
           if (!lead.address && enriched.address) {
             updateObj.address = enriched.address;
+            lead.address = enriched.address;
           }
 
           const extraNotes: string[] = [];
-          if (enriched.whatsapp) extraNotes.push(`WhatsApp: ${enriched.whatsapp}`);
-          if (enriched.openingHours) extraNotes.push(`Hours: ${enriched.openingHours}`);
-          if (enriched.managerName) extraNotes.push(`Dirigeant/Manager: ${enriched.managerName}`);
-          if (enriched.siretOrVat) extraNotes.push(`Legal ID: ${enriched.siretOrVat}`);
+          const existingNotes = lead.notes || '';
+          if (enriched.whatsapp && !existingNotes.includes(enriched.whatsapp)) {
+            extraNotes.push(`WhatsApp: ${enriched.whatsapp}`);
+          }
+          if (enriched.socialLinks?.facebook && !existingNotes.includes('facebook.com')) {
+            extraNotes.push(`Facebook: ${enriched.socialLinks.facebook}`);
+          }
+          if (enriched.socialLinks?.instagram && !existingNotes.includes('instagram.com')) {
+            extraNotes.push(`Instagram: ${enriched.socialLinks.instagram}`);
+          }
+          if (enriched.openingHours && !existingNotes.includes('Hours:')) {
+            extraNotes.push(`Hours: ${enriched.openingHours}`);
+          }
+          if (enriched.managerName && !existingNotes.includes(enriched.managerName)) {
+            extraNotes.push(`Dirigeant/Manager: ${enriched.managerName}`);
+          }
+          if (enriched.siretOrVat && !existingNotes.includes(enriched.siretOrVat)) {
+            extraNotes.push(`Legal ID: ${enriched.siretOrVat}`);
+          }
 
           if (extraNotes.length > 0) {
-            updateObj.notes = lead.notes ? `${lead.notes}\n${extraNotes.join('\n')}` : extraNotes.join('\n');
+            updateObj.notes = existingNotes ? `${existingNotes}\n${extraNotes.join('\n')}` : extraNotes.join('\n');
+            lead.notes = updateObj.notes;
           }
+
+          const quality = NormalizationService.computeDataQuality({
+            phone: updateObj.phone || lead.phone,
+            website,
+            email: updateObj.email || lead.email,
+            address: updateObj.address || lead.address,
+            notes: updateObj.notes || lead.notes,
+            rawData: { socialLinks: enriched.socialLinks }
+          });
+          updateObj.dataConfidence = quality.confidence;
+          updateObj.opportunityScore = quality.score;
 
           await db.update(schema.leads).set(updateObj).where(eq(schema.leads.id, lead.id));
         }
-
-        // Phase H: Fast Audit
-        try {
-          await WebsiteService.performAudit(lead.id, website);
-          results.auditsCompleted = (results.auditsCompleted || 0) + 1;
-        } catch (auditErr: any) {
-          console.warn(`[JobService] Audit failed for #${lead.id}: ${auditErr.message}`);
-        }
       } else {
         // Phase G-Fallback: No Traditional Website -> Extract Maximum Information from Social Media
-        // (100% Real public data only - zero fake/synthetic data)
-        const rawTags = (lead.rawData as any)?.tags || (lead.rawData as any) || {};
+        const rawTags = { ...(rawData?.tags || {}), ...(rawData?.socialLinks || {}) };
+        if (rawData?.socialLinks?.facebook && !rawTags['contact:facebook']) {
+          rawTags['contact:facebook'] = rawData.socialLinks.facebook;
+        }
+        if (rawData?.socialLinks?.instagram && !rawTags['contact:instagram']) {
+          rawTags['contact:instagram'] = rawData.socialLinks.instagram;
+        }
+
         const socialResult = await SocialEnrichmentService.enrichFromSocialMedia(
           lead.companyName, 
           lead.city, 
@@ -392,61 +467,150 @@ export class JobService {
           rawTags
         );
 
-        if (socialResult.evidence.length > 0) {
-          const evidenceBatch = socialResult.evidence.map(e => ({
-            leadId: lead.id,
-            fieldName: e.field,
-            value: e.value,
-            source: socialResult.platform ? `${socialResult.platform.toUpperCase()}_PROFILE` : 'SOCIAL_PRESENCE',
-            sourceUrl: e.url,
-            verified: e.confidence === 'HIGH',
-            confidence: e.confidence
-          }));
-
-          await db.insert(schema.fieldEvidence).values(evidenceBatch);
+        if (socialResult.evidence.length > 0 || Object.keys(socialResult.socialLinks).length > 0) {
+          if (socialResult.evidence.length > 0) {
+            const evidenceBatch = socialResult.evidence.map(e => ({
+              leadId: lead.id,
+              fieldName: e.field,
+              value: e.value,
+              source: socialResult.platform ? `${socialResult.platform.toUpperCase()}_PROFILE` : 'SOCIAL_PRESENCE',
+              sourceUrl: e.url,
+              verified: e.confidence === 'HIGH',
+              confidence: e.confidence
+            }));
+            await db.insert(schema.fieldEvidence).values(evidenceBatch);
+          }
 
           const updateObj: any = {
             lastEnrichedAt: new Date(),
             enrichmentSource: 'SOCIAL_MEDIA'
           };
 
-          if (socialResult.discoveredWebsite && !lead.website) {
+          if (socialResult.discoveredWebsite && !lead.website && !ValidationService.isSocialOrDirectoryUrl(socialResult.discoveredWebsite)) {
             updateObj.website = socialResult.discoveredWebsite;
+            updateObj.normalizedDomain = NormalizationService.normalizeDomain(socialResult.discoveredWebsite);
             updateObj.websiteStatus = 'verified';
             updateObj.websiteConfidence = 'HIGH';
             results.verifiedWebsites = (results.verifiedWebsites || 0) + 1;
+            website = socialResult.discoveredWebsite;
+          } else if (Object.keys(socialResult.socialLinks).length > 0 && !lead.website) {
+            updateObj.websiteStatus = 'social_profile';
+            updateObj.websiteConfidence = 'MEDIUM';
           }
 
           if (!lead.phone && socialResult.phone) {
-            updateObj.phone = socialResult.phone;
+            const formatted = NormalizationService.formatDisplayPhone(socialResult.phone, lead.country) || socialResult.phone;
+            updateObj.phone = formatted;
+            updateObj.normalizedPhone = NormalizationService.normalizePhone(socialResult.phone);
             results.phonesFound = (results.phonesFound || 0) + 1;
+            lead.phone = formatted;
           }
           if (!lead.email && socialResult.email) {
             updateObj.email = socialResult.email;
             results.emailsFound = (results.emailsFound || 0) + 1;
+            lead.email = socialResult.email;
           }
           if (!lead.address && socialResult.address) {
             updateObj.address = socialResult.address;
           }
-          if (socialResult.bio) {
-            updateObj.notes = lead.notes ? `${lead.notes}\nBio: ${socialResult.bio}` : `Bio: ${socialResult.bio}`;
+
+          const socialNotes: string[] = [];
+          const existingNotes = lead.notes || '';
+          if (socialResult.socialLinks.facebook && !existingNotes.includes('facebook.com')) {
+            socialNotes.push(`Facebook: ${socialResult.socialLinks.facebook}`);
           }
+          if (socialResult.socialLinks.instagram && !existingNotes.includes('instagram.com')) {
+            socialNotes.push(`Instagram: ${socialResult.socialLinks.instagram}`);
+          }
+          if (socialResult.socialLinks.linkedin && !existingNotes.includes('linkedin.com')) {
+            socialNotes.push(`LinkedIn: ${socialResult.socialLinks.linkedin}`);
+          }
+          if (socialResult.bio && !existingNotes.includes(socialResult.bio)) {
+            socialNotes.push(`Bio: ${socialResult.bio}`);
+          }
+
+          if (socialNotes.length > 0) {
+            updateObj.notes = existingNotes ? `${existingNotes}\n${socialNotes.join('\n')}` : socialNotes.join('\n');
+            lead.notes = updateObj.notes;
+          }
+
+          const quality = NormalizationService.computeDataQuality({
+            phone: updateObj.phone || lead.phone,
+            website: updateObj.website || lead.website,
+            email: updateObj.email || lead.email,
+            address: updateObj.address || lead.address,
+            notes: updateObj.notes || lead.notes,
+            rawData: { socialLinks: socialResult.socialLinks }
+          });
+          updateObj.dataConfidence = quality.confidence;
+          updateObj.opportunityScore = quality.score;
 
           await db.update(schema.leads).set(updateObj).where(eq(schema.leads.id, lead.id));
         }
       }
 
-      // Phase I: Opportunity Assessment
-      try {
-        await OpportunityService.analyzeLead(lead.id);
-        results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1;
-      } catch (oppErr: any) {
-        console.warn(`[JobService] Opportunity analysis failed for #${lead.id}: ${oppErr.message}`);
-      }
-
+      return { website };
     } catch (err: any) {
       console.warn(`[JobService] Lead enrichment failed for #${lead.id}: ${err.message}`);
+      return {};
     }
+  }
+  
+  private static async checkLeadMatchesCriteria(leadId: number, criteria: any): Promise<boolean> {
+    const lead = await db.query.leads.findFirst({
+      where: eq(schema.leads.id, leadId),
+      with: { evidence: true }
+    });
+    if (!lead) return false;
+
+    const evidenceList = (lead as any).evidence || [];
+    const hasOfficialWeb = Boolean(
+      lead.website && !ValidationService.isSocialOrDirectoryUrl(lead.website)
+    );
+    const hasFacebook = Boolean(
+      lead.notes?.toLowerCase().includes('facebook.com') ||
+      lead.website?.toLowerCase().includes('facebook.com') ||
+      evidenceList.some((e: any) => e.fieldName === 'facebook' && e.value)
+    );
+    const hasExplicitWa = Boolean(
+      lead.notes?.toLowerCase().includes('whatsapp') ||
+      evidenceList.some((e: any) => e.fieldName === 'whatsapp' && e.value)
+    );
+    const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, hasExplicitWa);
+    const hasWhatsApp = Boolean(hasExplicitWa || phoneAnalysis.isWhatsAppReady);
+
+    // 1. Direct Call Phone Filter
+    if (criteria.intentMode === 'DIRECT_CALL' || criteria.requireDirectPhone) {
+      if (!lead.phone || !ValidationService.validatePhone(lead.phone)) return false;
+    }
+
+    // 2. WhatsApp Filter
+    if (criteria.requireWhatsApp || criteria.intentMode === 'WHATSAPP') {
+      if (!hasWhatsApp) return false;
+    }
+
+    // 3. Facebook (No Website) Filter
+    if (criteria.intentMode === 'FACEBOOK_NO_WEBSITE') {
+      if (!hasFacebook || hasOfficialWeb) return false;
+    }
+
+    // 4. No Website Filter
+    if (criteria.intentMode === 'NO_WEBSITE' || criteria.targetNoWebsite) {
+      if (hasOfficialWeb) return false;
+    }
+
+    // 5. Mandatory Contact Info check if requested
+    if (criteria.requireContactInfo) {
+      const hasContact = Boolean(
+        (lead.phone && ValidationService.validatePhone(lead.phone)) ||
+        (lead.email && ValidationService.validateEmail(lead.email)) ||
+        hasOfficialWeb ||
+        (criteria.intentMode === 'FACEBOOK_NO_WEBSITE' && hasFacebook)
+      );
+      if (!hasContact) return false;
+    }
+
+    return true;
   }
 
   static async runCSVImport(jobId: number, rows: any[], mapping: any, campaignId?: number) {

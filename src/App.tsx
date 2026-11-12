@@ -2,7 +2,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
 import { auth } from './lib/firebase.ts';
 import { 
   Search, LayoutDashboard, Database, Settings, LogOut, BarChart3, Target, Filter, 
-  Upload, Check, AlertCircle, Loader2, Globe, Phone, Mail, MapPin, ExternalLink, 
+  Upload, Check, AlertCircle, AlertTriangle, Loader2, Globe, Phone, Mail, MapPin, ExternalLink, 
   RefreshCw, Star, Info, Lightbulb, MessageSquare, Linkedin, Languages, Wand2, 
   ShieldCheck, Copy, History, Calendar, Plus, Trash2, Download, MoreVertical,
   ChevronRight, ArrowRight, User, CheckCircle2, Clock, Menu, X, PanelLeftClose, PanelLeftOpen,
@@ -388,7 +388,7 @@ function AppContent() {
           ) : (
             <>
               {activeTab === 'dashboard' && <DashboardView setActiveTab={setActiveTab} onSelectLead={setSelectedLeadId} token={token} />}
-              {activeTab === 'generate' && <GenerateView token={token} />}
+              {activeTab === 'generate' && <GenerateView token={token} setActiveTab={setActiveTab} />}
               {activeTab === 'import' && <ImportView token={token} onBack={() => setActiveTab('generate')} />}
               {activeTab === 'leads' && <LeadsView token={token} onSelectLead={setSelectedLeadId} />}
               {activeTab === 'quality' && <DataQualityView token={token} />}
@@ -711,17 +711,32 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
         } else {
           const detail = statsRes.message || statsRes.details || statsRes.hint;
           setError(detail ? `${statsRes.error || 'Connection Error'}: ${detail}` : (statsRes.error || 'Failed to load stats'));
+          runDiagnostics();
         }
         if (leadsRes.success) setLeads(leadsRes.data);
       }).catch(err => {
         console.error('[DASHBOARD] Fetch error:', err);
         setError(err.message);
+        runDiagnostics();
       });
     }
   }, [token]);
 
   if (error) {
-    const isDbIssue = error.toLowerCase().includes('database') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('password') || error.toLowerCase().includes('socket') || error.toLowerCase().includes('enotfound') || error.toLowerCase().includes('relation');
+    const errLower = error.toLowerCase();
+    const isDbIssue =
+      errLower.includes('database') ||
+      errLower.includes('connect') ||
+      errLower.includes('timeout') ||
+      errLower.includes('password') ||
+      errLower.includes('socket') ||
+      errLower.includes('enotfound') ||
+      errLower.includes('econnrefused') ||
+      errLower.includes('etimedout') ||
+      errLower.includes('not defined') ||
+      errLower.includes('not configured') ||
+      errLower.includes('relation') ||
+      errLower.includes('tenant/user');
     return (
       <div className="max-w-xl mx-auto p-8 my-8 bg-white rounded-2xl border border-slate-200 shadow-sm text-center space-y-4 animate-in fade-in">
         <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center mx-auto text-red-600 shadow-sm">
@@ -732,7 +747,49 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
           <p className="text-xs text-slate-600 font-medium leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-100 font-mono text-left break-all">{error}</p>
         </div>
 
-        {isDbIssue && (
+        {error.includes('tenant/user') ? (() => {
+          const refMatch = error.match(/postgres\.([a-z0-9]+)/i);
+          const projectRef = refMatch?.[1] || '';
+          const supabaseUrl = projectRef
+            ? `https://supabase.com/dashboard/project/${projectRef}`
+            : 'https://supabase.com/dashboard/projects';
+          return (
+            <div className="p-5 bg-rose-50 border border-rose-200 rounded-xl text-left text-xs text-rose-950 space-y-3 shadow-xs">
+              <div className="flex items-center gap-2 text-rose-800 font-bold text-sm">
+                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span>Projet Supabase introuvable ou en pause</span>
+              </div>
+              <p className="text-[12px] text-rose-900 leading-relaxed">
+                L'erreur <code>tenant/user not found</code> signifie que le projet Supabase{projectRef ? <> <strong>{projectRef}</strong></> : null} est mis en pause, supprimé, ou que la variable <code>DATABASE_URL</code> sur Vercel pointe encore vers un ancien projet ou une mauvaise région du pooler.
+              </p>
+              <div className="p-3 bg-white/80 rounded-lg border border-rose-200/80 space-y-1.5 text-[11px] text-rose-900">
+                <p className="font-bold">Comment corriger :</p>
+                <ol className="list-decimal pl-4 space-y-1">
+                  <li>Ouvrez Supabase : si le projet est en veille, cliquez sur <strong>Restore project</strong>.</li>
+                  <li>Sinon, ouvrez votre projet Supabase actif &rarr; <strong>Connect</strong> &rarr; copiez l'URI du <strong>Transaction Pooler (port 6543)</strong>.</li>
+                  <li>Dans Vercel &rarr; <strong>Settings &rarr; Environment Variables</strong>, mettez à jour <code>DATABASE_URL</code> (Production, Preview, Development), puis cliquez sur <strong>Deployments &rarr; Redeploy</strong>.</li>
+                </ol>
+              </div>
+              <div className="pt-1 flex flex-wrap gap-2">
+                <a
+                  href={supabaseUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold transition-all shadow-xs"
+                >
+                  <span>Ouvrir Supabase &rarr;</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+                <button
+                  onClick={() => setError(null)}
+                  className="px-3 py-2 bg-white border border-rose-300 text-rose-800 hover:bg-rose-100/50 rounded-lg text-xs font-semibold"
+                >
+                  Ignorer et continuer
+                </button>
+              </div>
+            </div>
+          );
+        })() : isDbIssue && (
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-left text-xs text-amber-900 space-y-2">
             <p className="font-bold flex items-center gap-1.5 text-amber-950">
               <Lightbulb className="w-4 h-4 text-amber-600" />
@@ -901,7 +958,7 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
   );
 }
 
-function GenerateView({ token }: any) {
+function GenerateView({ token, setActiveTab }: any) {
   const [source, setSource] = useState<'osm' | 'csv'>('osm');
   const [loading, setLoading] = useState(false);
   const [jobId, setJobId] = useState<number | null>(null);
@@ -917,7 +974,8 @@ function GenerateView({ token }: any) {
     campaignName: 'Prospection Artisans & Commerces Paris',
     localOnly: true,
     requireContactInfo: true,
-    intentMode: 'NO_WEBSITE' as 'ALL' | 'NO_WEBSITE' | 'HIGH_VALUE' | 'DIRECT_CALL'
+    requireWhatsApp: false,
+    intentMode: 'ALL' as 'ALL' | 'NO_WEBSITE' | 'HIGH_VALUE' | 'DIRECT_CALL' | 'FACEBOOK_NO_WEBSITE' | 'WHATSAPP'
   });
 
   const targetPresets = [25, 50, 100, 250, 500];
@@ -975,6 +1033,7 @@ function GenerateView({ token }: any) {
         limit: criteria.maxResults,
         localOnly: criteria.localOnly,
         requireContactInfo: criteria.requireContactInfo,
+        requireWhatsApp: (criteria as any).requireWhatsApp,
         intentMode: criteria.intentMode
       },
       campaignName: criteria.campaignName
@@ -998,7 +1057,9 @@ function GenerateView({ token }: any) {
         category: criteria.category,
         limit: criteria.maxResults,
         localOnly: criteria.localOnly,
-        requireContactInfo: criteria.requireContactInfo
+        requireContactInfo: criteria.requireContactInfo,
+        requireWhatsApp: (criteria as any).requireWhatsApp,
+        intentMode: criteria.intentMode
       }
     }, token!);
     if (!res.success) {
@@ -1164,7 +1225,7 @@ function GenerateView({ token }: any) {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-2">
                   {[
                     {
                       id: 'NO_WEBSITE',
@@ -1188,6 +1249,22 @@ function GenerateView({ token }: any) {
                       title: '100% Téléphone Direct',
                       desc: 'Exclut toutes les fiches sans numéro. Conserve uniquement les prospects immédiatement joignables par appel direct ou WhatsApp.',
                       bgActive: 'bg-emerald-600 text-white border-emerald-600 shadow-sm',
+                      bgInactive: 'bg-white hover:border-emerald-300 text-slate-700 border-slate-200'
+                    },
+                    {
+                      id: 'FACEBOOK_NO_WEBSITE',
+                      badge: '🎯 Ultra-Ciblé',
+                      title: 'Facebook mais 0 Site',
+                      desc: 'Prospection chirurgicale : entreprises actives sur Facebook qui n’ont pas encore franchi le pas d’un site web officiel.',
+                      bgActive: 'bg-blue-600 text-white border-blue-600 shadow-sm',
+                      bgInactive: 'bg-white hover:border-blue-300 text-slate-700 border-slate-200'
+                    },
+                    {
+                      id: 'WHATSAPP',
+                      badge: '💬 Direct Sales',
+                      title: 'Priorité WhatsApp',
+                      desc: 'Filtre uniquement les prospects avec un numéro WhatsApp détecté. Idéal pour les campagnes de messagerie directe.',
+                      bgActive: 'bg-emerald-500 text-white border-emerald-500 shadow-sm',
                       bgInactive: 'bg-white hover:border-emerald-300 text-slate-700 border-slate-200'
                     },
                     {
@@ -1267,6 +1344,25 @@ function GenerateView({ token }: any) {
                     type="checkbox"
                     checked={criteria.requireContactInfo}
                     onChange={e => setCriteria({ ...criteria, requireContactInfo: e.target.checked })}
+                    className="w-5 h-5 rounded text-slate-900 focus:ring-slate-900 border-slate-300 mt-1 cursor-pointer"
+                  />
+                </div>
+
+                <div className="border-t border-slate-200/80 pt-3 flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <label htmlFor="requireWhatsAppToggle" className="text-xs font-bold text-slate-900 cursor-pointer flex items-center gap-1.5">
+                      <MessageCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                      💬 Filtrer par présence WhatsApp
+                    </label>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      Cible uniquement les entreprises ayant un bouton WhatsApp ou un numéro mobile détecté par le moteur Scrapling.
+                    </p>
+                  </div>
+                  <input
+                    id="requireWhatsAppToggle"
+                    type="checkbox"
+                    checked={(criteria as any).requireWhatsApp}
+                    onChange={e => setCriteria({ ...criteria, requireWhatsApp: e.target.checked } as any)}
                     className="w-5 h-5 rounded text-slate-900 focus:ring-slate-900 border-slate-300 mt-1 cursor-pointer"
                   />
                 </div>
@@ -1372,6 +1468,29 @@ function GenerateView({ token }: any) {
                   <StatMini label="Téléphones Trouvés" value={results.phonesFound || 0} color="text-indigo-600" />
                   <StatMini label="Emails Découverts" value={results.emailsFound || 0} color="text-violet-600" />
                 </div>
+
+                {jobStatus.status === 'completed' && (
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex flex-wrap items-center justify-between gap-3 animate-in fade-in">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
+                        ✓
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-emerald-950">Génération terminée avec succès !</p>
+                        <p className="text-[11px] text-emerald-800">
+                          {results.validBusinesses || results.newLeadsSaved || 0} prospects qualifiés ont été ajoutés à votre CRM.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab?.('leads')}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 shrink-0"
+                    >
+                      <span>Voir les prospects dans le CRM</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1833,7 +1952,6 @@ function LeadsView({ token, onSelectLead }: any) {
     if (oppScoreFilter && oppScoreFilter !== 'all') params.append('oppScoreRange', oppScoreFilter);
     if (auditFilter && auditFilter !== 'all') params.append('auditFilter', auditFilter);
     if (intentFilter && intentFilter !== 'all') params.append('intentFilter', intentFilter);
-    params.append('confidence', 'HIGH');
     params.append('scope', scopeFilter);
     params.append('sortBy', sortBy);
     params.append('sortOrder', sortOrder);
@@ -2058,6 +2176,46 @@ function LeadsView({ token, onSelectLead }: any) {
           <CheckCircle2 className="w-3.5 h-3.5" />
           <span>🎯 Contact Valide (Tél ou Email)</span>
           <span className="text-[10px] opacity-80 font-mono">({summary.withValidContact ?? ((summary.withPhone || 0) + (summary.withEmail || 0))})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setContactFilter(contactFilter === 'has_whatsapp' ? 'all' : 'has_whatsapp');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            contactFilter === 'has_whatsapp'
+              ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+              : "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
+          )}
+          title="Afficher uniquement les prospects équipés de WhatsApp (mobiles vérifiés & WhatsApp direct)"
+        >
+          <MessageCircle className="w-3.5 h-3.5 text-emerald-500 fill-emerald-500" />
+          <span>📱 WhatsApp</span>
+          <span className="text-[10px] opacity-80 font-mono font-bold">
+            ({summary.withWhatsapp ?? 0})
+          </span>
+        </button>
+
+        <button
+          onClick={() => {
+            setContactFilter(contactFilter === 'has_facebook' ? 'all' : 'has_facebook');
+            setPage(1);
+          }}
+          className={cn(
+            "px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 flex items-center gap-1.5 border",
+            contactFilter === 'has_facebook'
+              ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+              : "bg-blue-50 text-blue-800 border-blue-200 hover:bg-blue-100"
+          )}
+          title="Afficher uniquement les prospects avec une page Facebook identifiée"
+        >
+          <Facebook className="w-3.5 h-3.5 text-blue-600 fill-blue-600" />
+          <span>Facebook</span>
+          <span className="text-[10px] opacity-80 font-mono font-bold">
+            ({summary.withFacebook ?? 0})
+          </span>
         </button>
 
         <button
@@ -2289,6 +2447,8 @@ function LeadsView({ token, onSelectLead }: any) {
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 outline-none"
               >
                 <option value="all">Tous les canaux</option>
+                <option value="has_facebook">🔵 Page Facebook Disponible</option>
+                <option value="has_whatsapp">📱 WhatsApp Disponible (Mobiles vérifiés & Direct)</option>
                 <option value="valid_contact">🎯 Contact Valide Uniquement (Tél ou Email)</option>
                 <option value="has_phone">📞 Avec Téléphone direct</option>
                 <option value="has_email">✉️ Avec Email officiel</option>
@@ -2381,7 +2541,9 @@ function LeadsView({ token, onSelectLead }: any) {
               ))}
               {contactFilter !== 'all' && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-lg font-medium text-[11px]">
-                  {contactFilter === 'valid_contact' ? '🎯 Contact valide (Tél ou Email)' :
+                  {contactFilter === 'has_facebook' ? '🔵 Page Facebook' :
+                   contactFilter === 'has_whatsapp' ? '📱 WhatsApp Disponible' :
+                   contactFilter === 'valid_contact' ? '🎯 Contact valide (Tél ou Email)' :
                    contactFilter === 'has_phone' ? '📞 Avec Téléphone' :
                    contactFilter === 'has_email' ? '✉️ Avec Email' :
                    contactFilter === 'has_both' ? '💎 Tél + Email complet' :
@@ -2548,7 +2710,7 @@ function LeadsView({ token, onSelectLead }: any) {
                           if (!lead.phone) {
                             return <span className="text-[10px] text-slate-300 italic">Sans tél</span>;
                           }
-                          const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp));
+                          const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp || lead.notes?.includes('WhatsApp')));
                           return (
                             <>
                               {phoneAnalysis.isWhatsAppReady && phoneAnalysis.whatsappUrl ? (
@@ -2847,7 +3009,7 @@ function LeadDetailView({ leadId, token, onBack }: { leadId: number; token: stri
                 <span className="text-xs font-medium text-slate-600">{lead.address || 'Adresse locale non précisée'}, {lead.city}, {lead.country}</span>
               </div>
               {lead.phone && (() => {
-                const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp));
+                const phoneAnalysis = analyzePhoneNumber(lead.phone, lead.country, Boolean(lead.whatsapp || lead.notes?.includes('WhatsApp')));
                 return (
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-3 overflow-hidden">

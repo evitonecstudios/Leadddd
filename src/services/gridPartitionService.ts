@@ -31,14 +31,50 @@ export class GridPartitionService {
     return cells;
   }
 
+  // In-memory cache to prevent redundant geocoding requests
+  private static bboxCache = new Map<string, BoundingBox>();
+
+  // Pre-cached accurate bounding boxes for major European metros (0 network calls, 0 latency, 0 rate limits)
+  private static KNOWN_METROS: Record<string, BoundingBox> = {
+    'paris': { minLat: 48.8155, maxLat: 48.9021, minLon: 2.2241, maxLon: 2.4699 },
+    'lyon': { minLat: 45.7073, maxLat: 45.8082, minLon: 4.7718, maxLon: 4.8984 },
+    'marseille': { minLat: 43.1696, maxLat: 43.3912, minLon: 5.2892, maxLon: 5.5324 },
+    'geneve': { minLat: 46.1779, maxLat: 46.2366, minLon: 6.1082, maxLon: 6.1784 },
+    'geneva': { minLat: 46.1779, maxLat: 46.2366, minLon: 6.1082, maxLon: 6.1784 },
+    'toulouse': { minLat: 43.5326, maxLat: 43.6687, minLon: 1.3503, maxLon: 1.5153 },
+    'nice': { minLat: 43.6453, maxLat: 43.7594, minLon: 7.1818, maxLon: 7.3223 },
+    'nantes': { minLat: 47.1805, maxLat: 47.2842, minLon: -1.6425, maxLon: -1.4789 },
+    'strasbourg': { minLat: 48.5204, maxLat: 48.6471, minLon: 7.6841, maxLon: 7.8375 },
+    'bordeaux': { minLat: 44.8105, maxLat: 44.9152, minLon: -0.6387, maxLon: -0.5336 },
+    'lille': { minLat: 50.6000, maxLat: 50.6600, minLon: 3.0000, maxLon: 3.1200 },
+    'bruxelles': { minLat: 50.7962, maxLat: 50.9138, minLon: 4.3137, maxLon: 4.4370 },
+    'brussels': { minLat: 50.7962, maxLat: 50.9138, minLon: 4.3137, maxLon: 4.4370 }
+  };
+
   /**
-   * Attempts to get a bounding box for a city/country name using Nominatim.
+   * Attempts to get a bounding box for a city/country name using cache, Nominatim or Photon.
    */
   static async getBoundingBox(location: string): Promise<BoundingBox | null> {
-    try {
-      const cleanLocation = location?.trim();
-      if (!cleanLocation) return null;
+    const cleanLocation = location?.trim();
+    if (!cleanLocation) return null;
 
+    const normalizedKey = cleanLocation.toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .split(',')[0].trim();
+
+    // 1. Check known metros instant cache
+    if (this.KNOWN_METROS[normalizedKey]) {
+      return this.KNOWN_METROS[normalizedKey];
+    }
+
+    // 2. Check dynamic runtime cache
+    if (this.bboxCache.has(normalizedKey)) {
+      return this.bboxCache.get(normalizedKey)!;
+    }
+
+    // 3. Query Nominatim with polite headers and backoff
+    try {
       const response = await axios.get('https://nominatim.openstreetmap.org/search', {
         params: {
           q: cleanLocation,
@@ -46,26 +82,51 @@ export class GridPartitionService {
           limit: 1
         },
         headers: {
-          'User-Agent': 'LeadForge-Discovery-Engine/1.0'
+          'User-Agent': 'LeadForge-Prospecting-Engine/3.0 (https://leadforge.app; contact@leadforge.app)'
         },
-        timeout: 10000
+        timeout: 4000
       });
 
       if (response.data && response.data.length > 0) {
         const item = response.data[0];
         const boundingbox = item.boundingbox; // [minlat, maxlat, minlon, maxlon]
-        return {
+        const bbox: BoundingBox = {
           minLat: parseFloat(boundingbox[0]),
           maxLat: parseFloat(boundingbox[1]),
           minLon: parseFloat(boundingbox[2]),
           maxLon: parseFloat(boundingbox[3])
         };
+        this.bboxCache.set(normalizedKey, bbox);
+        return bbox;
       }
-      return null;
-    } catch (error) {
-      console.error('Failed to fetch bounding box for location:', location, error);
-      return null;
+    } catch (err: any) {
+      // If 429 or error, fall back to Photon OSM Geocoder without throwing
+      if (err.response?.status !== 429) {
+        console.info(`Nominatim notice for "${cleanLocation}": ${err.message}. Trying Photon fallback.`);
+      }
     }
+
+    // 4. Photon OSM Geocoder Fallback (no 429 rate limit, 100% OSM data)
+    try {
+      const photonRes = await axios.get(`https://photon.komoot.io/api/?q=${encodeURIComponent(cleanLocation)}&limit=1`, {
+        timeout: 3000
+      });
+      const feature = photonRes.data?.features?.[0];
+      if (feature && feature.geometry?.coordinates) {
+        const [lon, lat] = feature.geometry.coordinates;
+        // Construct reasonable city bounding box (+/- 0.06 deg ~ 7km radius)
+        const bbox: BoundingBox = {
+          minLat: lat - 0.05,
+          maxLat: lat + 0.05,
+          minLon: lon - 0.06,
+          maxLon: lon + 0.06
+        };
+        this.bboxCache.set(normalizedKey, bbox);
+        return bbox;
+      }
+    } catch {}
+
+    return null;
   }
 
   /**

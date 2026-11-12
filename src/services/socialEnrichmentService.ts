@@ -2,6 +2,8 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import https from 'https';
 import { logger } from '../lib/monitoring.ts';
+import { SearchProviderFactory } from './search/types.ts';
+import { IdentityService } from './identityService.ts';
 
 export interface SocialEnrichmentResult {
   socialUrl?: string;
@@ -40,12 +42,153 @@ export class SocialEnrichmentService {
       evidence: []
     };
 
-    if (!existingRawTags) return result;
+    const tags = existingRawTags || {};
 
-    // 1. Extract ONLY authentic social links present in real tags
-    this.extractSocialFromTags(existingRawTags, result);
+    // 1. Extract authentic social links present in real tags
+    this.extractSocialFromTags(tags, result);
 
-    // If no real social links found in tags, return immediately — ZERO synthetic guesses
+    // Collect snippets from search discovery so we can extract phone/email even if Facebook blocks HTML fetch
+    const searchSnippets: Array<{ url: string; platform: SocialEnrichmentResult['platform']; text: string }> = [];
+
+    // 1.5. If no real social links found in tags, attempt to DISCOVER them via search
+    if (Object.keys(result.socialLinks).length === 0 && companyName) {
+      try {
+        const candidates = await SearchProviderFactory.findSocialProfiles(companyName, city || '');
+        const cleanName = companyName
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .trim();
+        const cleanCity = (city || '')
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .trim();
+        const stopWords = new Set([
+          'the', 'and', 'les', 'des', 'aux', 'pour', 'chez', 'sarl', 'sas', 'eurl', 'sa', 'gmbh', 'llc', 'ltd',
+          'boulangerie', 'patisserie', 'restaurant', 'bistrot', 'brasserie', 'cafe', 'salon', 'coiffure',
+          'coiffeur', 'barbier', 'garage', 'atelier', 'maison', 'cabinet', 'boutique', 'plomberie', 'plombier',
+          'electricien', 'dentiste', 'optique', 'fleuriste', 'boucherie', 'charcuterie', 'paris', 'lyon', 'marseille'
+        ]);
+        let nameTokens = cleanName.split(/\s+/).filter(t => t.length >= 3 && !stopWords.has(t));
+        if (nameTokens.length === 0) {
+          nameTokens = cleanName.split(/\s+/).filter(t => t.length >= 3);
+        }
+
+        for (const cand of candidates) {
+          const lowerUrl = (cand.url || '').toLowerCase();
+          const haystack = `${cand.url || ''} ${cand.title || ''} ${cand.snippet || ''}`
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9\s]/g, ' ');
+
+          const matchedTokens = nameTokens.filter(t => haystack.includes(t));
+          const tokenRatio = nameTokens.length > 0 ? matchedTokens.length / nameTokens.length : 0;
+          const cityMatched = !cleanCity || cleanCity.length < 3 || haystack.includes(cleanCity);
+          const isRelevant = tokenRatio >= 0.75 && cityMatched;
+
+          if (!isRelevant) continue;
+
+          if (lowerUrl.includes('facebook.com/')) {
+            const cleanFb = this.normalizeFacebookUrl(cand.url);
+            if (cleanFb && !result.socialLinks.facebook) {
+              result.socialLinks.facebook = cleanFb;
+              result.platform = result.platform || 'facebook';
+              result.socialUrl = result.socialUrl || cleanFb;
+              result.evidence.push({
+                field: 'facebook',
+                value: cleanFb,
+                url: cleanFb,
+                method: `${cand.source || 'SEARCH'} Social Discovery`,
+                confidence: tokenRatio >= 0.75 ? 'HIGH' : 'MEDIUM'
+              });
+              searchSnippets.push({ url: cleanFb, platform: 'facebook', text: `${cand.title || ''} ${cand.snippet || ''}` });
+            }
+          } else if (lowerUrl.includes('instagram.com/')) {
+            const cleanIg = this.normalizeInstagramUrl(cand.url);
+            if (cleanIg && !result.socialLinks.instagram) {
+              result.socialLinks.instagram = cleanIg;
+              result.platform = result.platform || 'instagram';
+              result.socialUrl = result.socialUrl || cleanIg;
+              result.evidence.push({
+                field: 'instagram',
+                value: cleanIg,
+                url: cleanIg,
+                method: `${cand.source || 'SEARCH'} Social Discovery`,
+                confidence: tokenRatio >= 0.75 ? 'HIGH' : 'MEDIUM'
+              });
+              searchSnippets.push({ url: cleanIg, platform: 'instagram', text: `${cand.title || ''} ${cand.snippet || ''}` });
+            }
+          } else if (lowerUrl.includes('linkedin.com/')) {
+            const cleanLi = this.normalizeLinkedInUrl(cand.url);
+            if (cleanLi && !result.socialLinks.linkedin) {
+              result.socialLinks.linkedin = cleanLi;
+              result.platform = result.platform || 'linkedin';
+              result.socialUrl = result.socialUrl || cleanLi;
+              result.evidence.push({
+                field: 'linkedin',
+                value: cleanLi,
+                url: cleanLi,
+                method: `${cand.source || 'SEARCH'} Social Discovery`,
+                confidence: tokenRatio >= 0.75 ? 'HIGH' : 'MEDIUM'
+              });
+              searchSnippets.push({ url: cleanLi, platform: 'linkedin', text: `${cand.title || ''} ${cand.snippet || ''}` });
+            }
+          } else if (lowerUrl.includes('twitter.com/') || lowerUrl.includes('x.com/')) {
+            const cleanTw = this.normalizeTwitterUrl(cand.url);
+            if (cleanTw && !result.socialLinks.twitter) {
+              result.socialLinks.twitter = cleanTw;
+              result.platform = result.platform || 'twitter';
+              result.socialUrl = result.socialUrl || cleanTw;
+              result.evidence.push({
+                field: 'twitter',
+                value: cleanTw,
+                url: cleanTw,
+                method: `${cand.source || 'SEARCH'} Social Discovery`,
+                confidence: tokenRatio >= 0.75 ? 'HIGH' : 'MEDIUM'
+              });
+              searchSnippets.push({ url: cleanTw, platform: 'twitter', text: `${cand.title || ''} ${cand.snippet || ''}` });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[SocialEnrichment] Search discovery failed for ${companyName}:`, err);
+      }
+    }
+
+    // Extract phone / email from search snippets first as fast fallback
+    for (const snip of searchSnippets) {
+      if (!result.phone) {
+        const phone = this.extractPhoneFromText(snip.text);
+        if (phone) {
+          result.phone = phone;
+          result.evidence.push({
+            field: 'phone',
+            value: phone,
+            url: snip.url,
+            method: `${snip.platform?.toUpperCase()} Search Snippet`,
+            confidence: 'MEDIUM'
+          });
+        }
+      }
+      if (!result.email) {
+        const email = this.extractEmailFromText(snip.text);
+        if (email) {
+          result.email = email;
+          result.evidence.push({
+            field: 'email',
+            value: email,
+            url: snip.url,
+            method: `${snip.platform?.toUpperCase()} Search Snippet`,
+            confidence: 'MEDIUM'
+          });
+        }
+      }
+    }
+
     const verifiedCandidates: Array<{ url: string; platform: SocialEnrichmentResult['platform'] }> = [];
     if (result.socialLinks.facebook) verifiedCandidates.push({ url: result.socialLinks.facebook, platform: 'facebook' });
     if (result.socialLinks.instagram) verifiedCandidates.push({ url: result.socialLinks.instagram, platform: 'instagram' });
@@ -54,6 +197,11 @@ export class SocialEnrichmentService {
 
     if (verifiedCandidates.length === 0) {
       return result;
+    }
+
+    if (!result.platform) {
+      result.platform = verifiedCandidates[0].platform;
+      result.socialUrl = verifiedCandidates[0].url;
     }
 
     // 2. Safely inspect verified public profiles for contact details (phone, email, real site)
@@ -70,7 +218,7 @@ export class SocialEnrichmentService {
             'Cache-Control': 'no-cache'
           },
           httpsAgent: permissiveAgent,
-          timeout: 4000,
+          timeout: 3000,
           maxRedirects: 2,
           validateStatus: (status) => status >= 200 && status < 400
         });
@@ -86,6 +234,10 @@ export class SocialEnrichmentService {
         // Discard generic login/splash boilerplate
         if (this.isGenericSocialBoilerplate(fullSnippet)) {
           continue;
+        }
+
+        if (!result.bio && ogDesc && ogDesc.length > 10) {
+          result.bio = ogDesc.slice(0, 240);
         }
 
         // Extract real phone numbers from public social description
@@ -158,7 +310,8 @@ export class SocialEnrichmentService {
       if (!u.hostname.includes('facebook.com')) return null;
       const path = u.pathname.replace(/\/+$/, '').toLowerCase();
       const blockedPaths = ['', '/', '/home', '/login', '/policies', '/help', '/sharer', '/share', '/dialog', '/tr', '/plugins', '/pages'];
-      if (blockedPaths.includes(path) || path.length < 2) return null;
+      const blockedSegments = ['/posts/', '/videos/', '/photos/', '/events/', '/groups/', '/permalink', '/watch', '/marketplace'];
+      if (blockedPaths.includes(path) || path.length < 2 || blockedSegments.some(seg => path.includes(seg))) return null;
       return `${u.origin}${u.pathname}`;
     } catch {
       return null;

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema.ts';
@@ -7,11 +8,17 @@ const fullSchema = { ...schema };
 
 declare global {
   var _postgresPool: Pool | undefined;
+  var _postgresPoolKey: string | undefined;
 }
 
 export const sanitizePostgresUrl = (raw?: string): string | undefined => {
   if (!raw) return undefined;
-  const trimmed = raw.trim().replace(/^["']|["']$/g, '').trim();
+  let trimmed = raw.trim().replace(/^["']|["']$/g, '').trim();
+  // Strip accidental "DATABASE_URL=" or "psql " prefixes pasted into env UI
+  trimmed = trimmed.replace(/^[A-Z0-9_]+=/, '').replace(/^psql\s+/i, '').trim();
+  trimmed = trimmed.replace(/^["']|["']$/g, '').trim();
+  if (!trimmed) return undefined;
+
   // Match: postgresql://USER:PASSWORD@HOST...
   const match = trimmed.match(/^(postgres(?:ql)?:\/\/)([^:]+):(.*)@([^@]+)$/);
   if (!match) return trimmed;
@@ -27,18 +34,42 @@ export const sanitizePostgresUrl = (raw?: string): string | undefined => {
 };
 
 export const getConnectionString = (): string | undefined => {
-  const raw = 
-    process.env.DATABASE_URL || 
-    process.env.POSTGRES_URL || 
-    process.env.POSTGRESQL_URL || 
-    process.env.SUPABASE_DB_URL || 
+  const raw =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.POSTGRESQL_URL ||
+    process.env.SUPABASE_DB_URL ||
     process.env.DB_URL;
-    
+
   return sanitizePostgresUrl(raw);
 };
 
+export const hasDbConfig = (): boolean => {
+  return Boolean(
+    getConnectionString() ||
+      process.env.SQL_HOST ||
+      process.env.POSTGRES_HOST
+  );
+};
+
+const getPoolSignature = (): string => {
+  const conn = getConnectionString();
+  if (conn) return `url:${conn}`;
+  if (process.env.SQL_HOST) return `sql:${process.env.SQL_HOST}:${process.env.SQL_DB_NAME || ''}`;
+  if (process.env.POSTGRES_HOST) return `pg:${process.env.POSTGRES_HOST}:${process.env.POSTGRES_DATABASE || ''}`;
+  return 'unconfigured';
+};
+
 export const createPool = () => {
-  if (!global._postgresPool) {
+  const sig = getPoolSignature();
+  if (!global._postgresPool || global._postgresPoolKey !== sig) {
+    if (global._postgresPool) {
+      global._postgresPool.end().catch(() => {});
+    }
+    global._postgresPoolKey = sig;
+
     if (process.env.SQL_HOST) {
       global._postgresPool = new Pool({
         host: process.env.SQL_HOST,
@@ -47,6 +78,17 @@ export const createPool = () => {
         database: process.env.SQL_DB_NAME,
         max: 10,
         connectionTimeoutMillis: 10000,
+      });
+    } else if (process.env.POSTGRES_HOST) {
+      global._postgresPool = new Pool({
+        host: process.env.POSTGRES_HOST,
+        user: process.env.POSTGRES_USER || 'postgres',
+        password: process.env.POSTGRES_PASSWORD,
+        database: process.env.POSTGRES_DATABASE || 'postgres',
+        ssl: process.env.POSTGRES_HOST.includes('localhost') ? false : { rejectUnauthorized: false },
+        max: process.env.VERCEL ? 3 : 10,
+        connectionTimeoutMillis: 8000,
+        idleTimeoutMillis: 30000,
       });
     } else {
       const connString = getConnectionString();
@@ -61,10 +103,10 @@ export const createPool = () => {
         });
       } else {
         global._postgresPool = new Pool({
-          host: 'localhost',
+          host: '127.0.0.1',
           database: 'postgres',
-          max: 5,
-          connectionTimeoutMillis: 3000,
+          max: 2,
+          connectionTimeoutMillis: 1500,
         });
       }
     }
@@ -76,12 +118,17 @@ export const createPool = () => {
   return global._postgresPool;
 };
 
-// Initialize pool lazily on first use or explicitly here
+// Initialize pool on load (after dotenv/config has executed)
 createPool();
-const pool = global._postgresPool!;
-export const db = drizzle(pool, { schema: fullSchema });
+export const db = drizzle(global._postgresPool!, { schema: fullSchema });
 
 export async function initDatabaseSchema() {
+  if (!hasDbConfig()) {
+    return {
+      success: false,
+      error: 'DATABASE_URL environment variable is not configured in this environment.',
+    };
+  }
   const p = createPool();
   try {
     await p.query(SCHEMA_SQL);
@@ -94,20 +141,22 @@ export async function initDatabaseSchema() {
 }
 
 export async function checkDbHealth() {
-  const p = createPool();
   const connString = getConnectionString();
-  
-  let hostInfo = 'localhost';
+  const explicitHost = process.env.SQL_HOST || process.env.POSTGRES_HOST;
+
+  let hostInfo = explicitHost || '(non configuré)';
   let portInfo = '5432';
   let isSupabasePooler = false;
   let isDirectSupabase = false;
 
   if (connString) {
     try {
-      const match = connString.match(/@([^:/]+)(?::(\d+))?/);
+      const match = connString.match(/@([^:/?#]+)(?::(\d+))?/);
       if (match) {
         hostInfo = match[1];
         portInfo = match[2] || '5432';
+      } else {
+        hostInfo = '(URL invalide — @ manquant)';
       }
       isSupabasePooler = hostInfo.includes('pooler.supabase.com') || portInfo === '6543';
       isDirectSupabase = hostInfo.includes('supabase.co') && portInfo === '5432';
@@ -122,7 +171,7 @@ export async function checkDbHealth() {
     error: null as string | null,
     code: null as string | null,
     diagnostics: {
-      hasConnectionString: Boolean(connString),
+      hasConnectionString: Boolean(connString || explicitHost),
       detectedHost: hostInfo,
       detectedPort: portInfo,
       isSupabasePooler,
@@ -131,25 +180,36 @@ export async function checkDbHealth() {
     }
   };
 
-  if (!connString && (process.env.VERCEL || process.env.NODE_ENV === 'production')) {
-    result.error = 'DATABASE_URL environment variable is not defined.';
+  if (!connString && !explicitHost) {
+    result.error = 'DATABASE_URL environment variable is not defined in this runtime.';
     result.code = 'NO_DATABASE_URL';
-    result.diagnostics.recommendation = 'In Vercel -> Project Settings -> Environment Variables, add DATABASE_URL (Supabase Transaction Pooler port 6543), then trigger a Redeploy.';
+    result.diagnostics.recommendation = process.env.VERCEL
+      ? 'Dans Vercel -> Settings -> Environment Variables, ajoutez DATABASE_URL (URI du Transaction Pooler Supabase, port 6543) pour Production/Preview/Development, puis cliquez sur Deployments -> Redeploy.'
+      : 'La variable DATABASE_URL est absente de cet environnement. Ajoutez DATABASE_URL (URI du Transaction Pooler Supabase, port 6543) dans les variables/Secrets de votre déploiement puis redémarrez.';
     return result;
   }
+
+  if (connString && hostInfo.startsWith('(URL invalide')) {
+    result.error = 'DATABASE_URL format is invalid (missing user:password@host).';
+    result.code = 'INVALID_DATABASE_URL';
+    result.diagnostics.recommendation = 'Vérifiez le format de DATABASE_URL : postgresql://postgres.<ref>:<mot_de_passe>@aws-0-<region>.pooler.supabase.com:6543/postgres';
+    return result;
+  }
+
+  const p = createPool();
 
   try {
     const res = await p.query('SELECT 1');
     result.connected = res.rowCount === 1;
     result.success = result.connected;
-    
+
     // Check tables
     const tableRes = await p.query(`
       SELECT count(*) FROM information_schema.tables 
       WHERE table_schema = 'public'
     `);
     result.tables = parseInt(tableRes.rows[0].count);
-    
+
     // If connected but tables are missing, auto-initialize them!
     if (result.connected && result.tables < 5) {
       console.log(`[DB-HEALTH] Database has only ${result.tables} tables. Attempting auto-provisioning...`);
@@ -168,18 +228,23 @@ export async function checkDbHealth() {
   } catch (err: any) {
     result.error = err.message;
     result.code = err.code;
+    const msgLower = (err.message || '').toLowerCase();
 
-    // Provide intelligent, actionable advice based on PostgreSQL error code
-    if (err.message?.includes('tenant/user') && err.message?.includes('not found')) {
-      result.diagnostics.recommendation = 'Erreur Supabase Pooler: Le mot de passe de la base de données est incorrect dans Vercel, ou le projet a été réinitialisé. Allez dans Supabase -> Project Settings -> Database -> "Reset database password", définissez un nouveau mot de passe, copiez la chaîne URI du Transaction Pooler (port 6543) et collez-la dans Vercel -> Settings -> Environment Variables, puis cliquez sur Deployments -> Redeploy.';
+    // Provide intelligent, actionable advice based on PostgreSQL error code or message
+    if (msgLower.includes('tenant/user') && msgLower.includes('not found')) {
+      const refMatch = err.message.match(/postgres\.([a-z0-9]+)/i);
+      const refLabel = refMatch?.[1] ? ` (${refMatch[1]})` : '';
+      result.diagnostics.recommendation = `Erreur Supabase Pooler : le projet${refLabel} est introuvable, mis en pause ou supprimé, ou l'URL du pooler (région aws-0/aws-1) ne correspond pas. Vérifiez votre projet actif dans Supabase -> Connect -> Transaction Pooler (port 6543), mettez à jour DATABASE_URL dans Vercel -> Settings -> Environment Variables, puis faites Deployments -> Redeploy.`;
     } else if (err.code === 'ECONNREFUSED') {
-      result.diagnostics.recommendation = 'Connection refused. If on Vercel, localhost is not available. Please set DATABASE_URL with a cloud database (e.g. Supabase or Neon).';
-    } else if (err.code === 'ETIMEDOUT') {
-      result.diagnostics.recommendation = 'Connection timed out. On Supabase, use the Transaction Pooler URL (port 6543 with aws-0-*.pooler.supabase.com), not direct port 5432.';
-    } else if (err.code === '28P01' || err.message?.includes('password')) {
-      result.diagnostics.recommendation = 'Password authentication failed. Check your database password. If it contains special characters (@, #, !, $), URL-encode them (e.g., %40).';
+      result.diagnostics.recommendation = 'Connexion refusée. En environnement cloud/Vercel, localhost n’est pas disponible : vérifiez que DATABASE_URL pointe vers Supabase (port 6543) et redeployez.';
+    } else if (err.code === 'ETIMEDOUT' || msgLower.includes('timeout')) {
+      result.diagnostics.recommendation = isDirectSupabase
+        ? 'Timeout de connexion sur le port direct 5432 (IPv6 bloqué en serverless). Utilisez l’URL du Transaction Pooler Supabase sur le port 6543 (aws-*.pooler.supabase.com:6543).'
+        : 'Timeout de connexion à la base de données. Vérifiez que DATABASE_URL est bien définie sur Vercel (Transaction Pooler port 6543), que le projet Supabase n’est pas en pause, puis faites Redeploy.';
+    } else if (err.code === '28P01' || msgLower.includes('password')) {
+      result.diagnostics.recommendation = 'Authentification échouée. Vérifiez le mot de passe dans DATABASE_URL (encodez les caractères spéciaux comme @ en %40).';
     } else if (err.code === 'ENOTFOUND') {
-      result.diagnostics.recommendation = 'Host address not found. Double check your DATABASE_URL host domain.';
+      result.diagnostics.recommendation = 'Nom d’hôte introuvable. Vérifiez le domaine dans DATABASE_URL.';
     }
 
     return result;

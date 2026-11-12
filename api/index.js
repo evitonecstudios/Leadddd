@@ -621,7 +621,8 @@ __export(db_exports, {
   createPool: () => createPool,
   db: () => db,
   getConnectionString: () => getConnectionString,
-  initDatabaseSchema: () => initDatabaseSchema
+  initDatabaseSchema: () => initDatabaseSchema,
+  sanitizePostgresUrl: () => sanitizePostgresUrl
 });
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -702,7 +703,9 @@ async function checkDbHealth() {
   } catch (err) {
     result.error = err.message;
     result.code = err.code;
-    if (err.code === "ECONNREFUSED") {
+    if (err.message?.includes("tenant/user") && err.message?.includes("not found")) {
+      result.diagnostics.recommendation = 'Erreur Supabase Pooler: Le mot de passe de la base de donn\xE9es est incorrect dans Vercel, ou le projet a \xE9t\xE9 r\xE9initialis\xE9. Allez dans Supabase -> Project Settings -> Database -> "Reset database password", d\xE9finissez un nouveau mot de passe, copiez la cha\xEEne URI du Transaction Pooler (port 6543) et collez-la dans Vercel -> Settings -> Environment Variables, puis cliquez sur Deployments -> Redeploy.';
+    } else if (err.code === "ECONNREFUSED") {
       result.diagnostics.recommendation = "Connection refused. If on Vercel, localhost is not available. Please set DATABASE_URL with a cloud database (e.g. Supabase or Neon).";
     } else if (err.code === "ETIMEDOUT") {
       result.diagnostics.recommendation = "Connection timed out. On Supabase, use the Transaction Pooler URL (port 6543 with aws-0-*.pooler.supabase.com), not direct port 5432.";
@@ -714,17 +717,30 @@ async function checkDbHealth() {
     return result;
   }
 }
-var fullSchema, getConnectionString, createPool, pool, db;
+var fullSchema, sanitizePostgresUrl, getConnectionString, createPool, pool, db;
 var init_db = __esm({
   "src/db/index.ts"() {
     "use strict";
     init_schema();
     init_schemaDdl();
     fullSchema = { ...schema_exports };
+    sanitizePostgresUrl = (raw) => {
+      if (!raw) return void 0;
+      const trimmed = raw.trim().replace(/^["']|["']$/g, "").trim();
+      const match = trimmed.match(/^(postgres(?:ql)?:\/\/)([^:]+):(.*)@([^@]+)$/);
+      if (!match) return trimmed;
+      const [, prefix, user, rawPassword, hostAndRest] = match;
+      let cleanPassword = rawPassword;
+      try {
+        cleanPassword = decodeURIComponent(rawPassword);
+      } catch {
+      }
+      const encodedPassword = encodeURIComponent(cleanPassword);
+      return `${prefix}${user}:${encodedPassword}@${hostAndRest}`;
+    };
     getConnectionString = () => {
       const raw = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRESQL_URL || process.env.SUPABASE_DB_URL || process.env.DB_URL;
-      if (!raw) return void 0;
-      return raw.trim().replace(/^["']|["']$/g, "");
+      return sanitizePostgresUrl(raw);
     };
     createPool = () => {
       if (!global._postgresPool) {
@@ -745,7 +761,7 @@ var init_db = __esm({
               connectionString: connString,
               ssl: isLocal ? false : { rejectUnauthorized: false },
               max: process.env.VERCEL ? 3 : 10,
-              connectionTimeoutMillis: 5e3,
+              connectionTimeoutMillis: 8e3,
               idleTimeoutMillis: 3e4
             });
           } else {
@@ -769,12 +785,1164 @@ var init_db = __esm({
   }
 });
 
+// src/lib/monitoring.ts
+function estimateAiCost(model, inputTokens, outputTokens) {
+  let modelKey = "gemini-1.5-flash";
+  if (model.includes("3.8-flash")) modelKey = "gemini-3.8-flash";
+  else if (model.includes("pro")) modelKey = "gemini-1.5-pro";
+  const rates = AI_COSTS[modelKey];
+  if (!rates) return 0;
+  return inputTokens * rates.input + outputTokens * rates.output;
+}
+var logger, metrics, AI_COSTS;
+var init_monitoring = __esm({
+  "src/lib/monitoring.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    logger = {
+      info: async (component, message, metadata, source, requestId) => {
+        try {
+          await db.insert(systemLogs).values({
+            level: "INFO",
+            component,
+            message,
+            metadata,
+            source,
+            requestId
+          });
+        } catch (error) {
+          console.error("Failed to write log to DB:", error);
+        }
+      },
+      warn: async (component, message, metadata, source, requestId) => {
+        try {
+          await db.insert(systemLogs).values({
+            level: "WARN",
+            component,
+            message,
+            metadata,
+            source,
+            requestId
+          });
+        } catch (error) {
+          console.error("Failed to write log to DB:", error);
+        }
+      },
+      error: async (component, message, error, metadata, source, requestId, retryCount) => {
+        try {
+          await db.insert(systemLogs).values({
+            level: "ERROR",
+            component,
+            message,
+            errorType: error instanceof Error ? error.name : typeof error === "string" ? error : void 0,
+            metadata: {
+              errorMessage: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : void 0,
+              ...metadata
+            },
+            source,
+            requestId,
+            retryCount
+          });
+        } catch (err) {
+          console.error("Failed to write log to DB:", err);
+        }
+      }
+    };
+    metrics = {
+      record: async (category, source, status, durationMs, metadata, tokenCount, estimatedCost) => {
+        try {
+          await db.insert(requestMetrics).values({
+            category,
+            source,
+            status,
+            durationMs,
+            tokenCount,
+            estimatedCost,
+            metadata
+          });
+        } catch (error) {
+          console.error("Failed to record metric to DB:", error);
+        }
+      }
+    };
+    AI_COSTS = {
+      "gemini-1.5-flash": {
+        input: 125e-6 / 1e3,
+        output: 375e-6 / 1e3
+      },
+      "gemini-1.5-pro": {
+        input: 35e-4 / 1e3,
+        output: 0.0105 / 1e3
+      },
+      "gemini-3.8-flash": {
+        input: 1e-4 / 1e3,
+        // Estimated
+        output: 3e-4 / 1e3
+        // Estimated
+      }
+    };
+  }
+});
+
+// src/services/sources/chainFilter.ts
+var ChainFilter;
+var init_chainFilter = __esm({
+  "src/services/sources/chainFilter.ts"() {
+    "use strict";
+    ChainFilter = class {
+      static {
+        // Common corporate brands, retail chains, fast-food franchises, and multinational conglomerates
+        this.KNOWN_CHAINS = [
+          // Electronics, Books & Multimedia
+          "fnac",
+          "darty",
+          "boulanger",
+          "apple store",
+          "apple",
+          "mediamarkt",
+          "best buy",
+          "micromania",
+          "nature & decouvertes",
+          "nature et decouvertes",
+          "cultura",
+          "ldlc",
+          // Supermarkets & Hypermarkets & Convenience Stores
+          "carrefour",
+          "carrefour market",
+          "carrefour city",
+          "carrefour express",
+          "carrefour contact",
+          "monoprix",
+          "monop",
+          "monop'",
+          "auchan",
+          "leclerc",
+          "e.leclerc",
+          "intermarche",
+          "intermarch\xE9",
+          "casino",
+          "super u",
+          "hyper u",
+          "u express",
+          "franprix",
+          "lidl",
+          "aldi",
+          "cora",
+          "match",
+          "walmart",
+          "target",
+          "tesco",
+          "sainsbury",
+          "marks & spencer",
+          "costco",
+          "migros",
+          "coop",
+          "denner",
+          "spar",
+          "spar express",
+          "seven eleven",
+          "7-eleven",
+          "carrefour bio",
+          // Fast Food, Coffee & Casual Dining Chains
+          "mcdonald",
+          "mcdonald's",
+          "mcdo",
+          "burger king",
+          "kfc",
+          "subway",
+          "starbucks",
+          "domino",
+          "domino's",
+          "pizza hut",
+          "five guys",
+          "chipotle",
+          "paul",
+          "brioche doree",
+          "brioche dor\xE9e",
+          "columbus cafe",
+          "columbus caf\xE9",
+          "pret a manger",
+          "pr\xEAt \xE0 manger",
+          "costa coffee",
+          "dunkin",
+          "o'tacos",
+          "otacos",
+          "pitaya",
+          "quick",
+          "buffalo grill",
+          "courtepaille",
+          "la boucherie",
+          "hippopotamus",
+          "flunch",
+          "del arte",
+          "pizza del arte",
+          "vapiano",
+          "nando",
+          "nando's",
+          // Fashion, Footwear & Apparel Chains
+          "zara",
+          "h&m",
+          "h & m",
+          "mango",
+          "bershka",
+          "pull&bear",
+          "pull and bear",
+          "stradivarius",
+          "primark",
+          "uniqlo",
+          "celio",
+          "jules",
+          "brice",
+          "etam",
+          "calzedonia",
+          "intimissimi",
+          "tezenis",
+          "kiabi",
+          "gemo",
+          "g\xE9mo",
+          "la halle",
+          "promod",
+          "gap",
+          "levi's",
+          "levis",
+          "foot locker",
+          "courir",
+          "snipes",
+          "jd sports",
+          "decathlon",
+          "intersport",
+          "go sport",
+          "pimkie",
+          "jennyfer",
+          "undiz",
+          "petit bateau",
+          "okaidi",
+          "oka\xEFdi",
+          "sergent major",
+          // Beauty, Cosmetics & Perfumery
+          "sephora",
+          "marionnaud",
+          "yves rocher",
+          "nocibe",
+          "nocib\xE9",
+          "kiko milano",
+          "kiko",
+          "l'occitane",
+          "loccitane",
+          "the body shop",
+          "lush",
+          "mac cosmetics",
+          "ritual",
+          "rituals",
+          // Home, DIY & Furniture
+          "ikea",
+          "leroy merlin",
+          "castorama",
+          "brico depot",
+          "brico d\xE9p\xF4t",
+          "bricorama",
+          "mr bricolage",
+          "conforama",
+          "but",
+          "maisons du monde",
+          "habitat",
+          "alinea",
+          "alin\xE9a",
+          "saint maclou",
+          // Telecom & Tech Operators
+          "orange",
+          "sfr",
+          "bouygues telecom",
+          "bouygues",
+          "free center",
+          "free mobile",
+          "vodafone",
+          "o2",
+          "t-mobile",
+          "at&t",
+          "verizon",
+          "swisscom",
+          "sunrise",
+          "salt store",
+          "salt",
+          // Banks & Financial Institutions
+          "bnp paribas",
+          "societe generale",
+          "soci\xE9t\xE9 g\xE9n\xE9rale",
+          "credit agricole",
+          "cr\xE9dit agricole",
+          "lcl",
+          "caisse d'epargne",
+          "caisse d'\xE9pargne",
+          "banque populaire",
+          "credit mutuel",
+          "cr\xE9dit mutuel",
+          "cic",
+          "axa",
+          "allianz",
+          "groupama",
+          "macif",
+          "maif",
+          "matmut",
+          "ubs",
+          "credit suisse",
+          "postfinance",
+          "santander",
+          "bbva",
+          "hsbc",
+          "barclays",
+          "deutsche bank",
+          // Fuel & Automotive Service Chains
+          "total",
+          "totalenergies",
+          "shell",
+          "bp",
+          "esso",
+          "repsol",
+          "eni",
+          "norauto",
+          "feu vert",
+          "midas",
+          "speedy",
+          "point s",
+          "carglass",
+          "euromaster",
+          "avis",
+          "hertz",
+          "sixt",
+          "europcar",
+          "avia",
+          "sherpa",
+          "agip",
+          "texaco",
+          "q8",
+          "relais",
+          "station total",
+          "station avia",
+          // Eyewear Chains
+          "optical center",
+          "alain afflelou",
+          "afflelou",
+          "krys",
+          "grandoptical",
+          "atol",
+          "generale d'optique",
+          "g\xE9n\xE9rale d'optique",
+          "optique 2000",
+          // Frozen Food & Specialty Chain Retail
+          "picard",
+          "naturalia",
+          "biocoop",
+          "bio c' bon",
+          "bio c bon",
+          "la vie claire",
+          // Bakery Chains
+          "marie blachere",
+          "marie blach\xE8re",
+          "boulangerie ange",
+          "ange",
+          "la mie caline",
+          "la mie c\xE2line",
+          "feuillette",
+          "boulangerie feuillette",
+          "louise",
+          "boulangerie louise",
+          // Fitness & Gym Chains
+          "basic fit",
+          "basic-fit",
+          "fitness park",
+          "keep cool",
+          "neoness",
+          "on air fitness",
+          "l'orange bleue",
+          "orange bleue",
+          "magic form",
+          // Hair Salon Chains
+          "franck provost",
+          "jean louis david",
+          "saint algue",
+          "shampoo expert",
+          "coiff&co",
+          "tchip",
+          "tchip coiffure",
+          "camille albane",
+          // Healthcare & Pharmacy Franchises
+          "pharmacie lafayette",
+          "optique lafayette",
+          "dentego",
+          "point vision",
+          "vertuo",
+          // Hotel & Hospitality Chains
+          "ibis",
+          "ibis budget",
+          "ibis styles",
+          "novotel",
+          "mercure",
+          "sofitel",
+          "marriott",
+          "hilton",
+          "best western",
+          "b&b hotels",
+          "premiere classe",
+          "premi\xE8re classe",
+          "campanile",
+          "kyriad",
+          "f1 hotel",
+          "hotel f1",
+          "radisson",
+          "sheraton",
+          "holiday inn"
+        ];
+      }
+      /**
+       * Evaluates whether an OSM entity or raw lead represents a major corporate chain or famous multinational place.
+       */
+      static isChainOrMajorBrand(tags, name) {
+        if (!tags) tags = {};
+        if (tags.brand || tags["brand:wikidata"] || tags["brand:wikipedia"]) {
+          return true;
+        }
+        if (tags.chain === "yes" || tags.franchise === "yes") {
+          return true;
+        }
+        if (tags.network && typeof tags.network === "string" && tags.network.length > 2) {
+          return true;
+        }
+        if (tags.operator && typeof tags.operator === "string") {
+          const op = tags.operator.toLowerCase();
+          for (const chain of this.KNOWN_CHAINS) {
+            if (op.includes(chain)) return true;
+          }
+        }
+        const businessName = (name || tags.name || "").toLowerCase().trim();
+        if (!businessName) return false;
+        const cleanBusinessName = businessName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['’]/g, "");
+        for (const chain of this.KNOWN_CHAINS) {
+          const cleanChain = chain.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['’]/g, "");
+          const regex = new RegExp(`(^|\\s|[^a-z0-9])${cleanChain}($|\\s|[^a-z0-9])`, "i");
+          if (regex.test(cleanBusinessName) || cleanBusinessName.startsWith(cleanChain + " ") || cleanBusinessName === cleanChain) {
+            return true;
+          }
+        }
+        if (tags.amenity === "police" || tags.amenity === "fire_station" || tags.amenity === "embassy" || tags.amenity === "courthouse" || tags.amenity === "townhall" || tags.public_transport) {
+          return true;
+        }
+        return false;
+      }
+    };
+  }
+});
+
+// src/services/socialEnrichmentService.ts
+import axios2 from "axios";
+import * as cheerio3 from "cheerio";
+import https2 from "https";
+var SocialEnrichmentService;
+var init_socialEnrichmentService = __esm({
+  "src/services/socialEnrichmentService.ts"() {
+    "use strict";
+    init_monitoring();
+    SocialEnrichmentService = class {
+      static {
+        this.CRAWLER_USER_AGENT = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
+      }
+      static {
+        this.GOOGLEBOT_USER_AGENT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+      }
+      /**
+       * Normalizes and validates real social media profile URLs from verified data sources.
+       * STRICT POLICY: NEVER guesses or invents synthetic profile URLs or slugs.
+       */
+      static async enrichFromSocialMedia(companyName, city, country, existingRawTags) {
+        const result = {
+          socialLinks: {},
+          evidence: []
+        };
+        if (!existingRawTags) return result;
+        this.extractSocialFromTags(existingRawTags, result);
+        const verifiedCandidates = [];
+        if (result.socialLinks.facebook) verifiedCandidates.push({ url: result.socialLinks.facebook, platform: "facebook" });
+        if (result.socialLinks.instagram) verifiedCandidates.push({ url: result.socialLinks.instagram, platform: "instagram" });
+        if (result.socialLinks.linkedin) verifiedCandidates.push({ url: result.socialLinks.linkedin, platform: "linkedin" });
+        if (result.socialLinks.twitter) verifiedCandidates.push({ url: result.socialLinks.twitter, platform: "twitter" });
+        if (verifiedCandidates.length === 0) {
+          return result;
+        }
+        const permissiveAgent = new https2.Agent({ rejectUnauthorized: false });
+        for (const candidate of verifiedCandidates) {
+          try {
+            const userAgent = candidate.platform === "facebook" ? this.CRAWLER_USER_AGENT : this.GOOGLEBOT_USER_AGENT;
+            const res = await axios2.get(candidate.url, {
+              headers: {
+                "User-Agent": userAgent,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8",
+                "Cache-Control": "no-cache"
+              },
+              httpsAgent: permissiveAgent,
+              timeout: 4e3,
+              maxRedirects: 2,
+              validateStatus: (status) => status >= 200 && status < 400
+            });
+            if (typeof res.data !== "string") continue;
+            const $ = cheerio3.load(res.data);
+            const ogTitle = $('meta[property="og:title"]').attr("content") || $("title").text() || "";
+            const ogDesc = $('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "";
+            const fullSnippet = `${ogTitle} ${ogDesc}`.trim();
+            if (this.isGenericSocialBoilerplate(fullSnippet)) {
+              continue;
+            }
+            if (!result.phone) {
+              const phone = this.extractPhoneFromText(fullSnippet);
+              if (phone) {
+                result.phone = phone;
+                result.evidence.push({
+                  field: "phone",
+                  value: phone,
+                  url: candidate.url,
+                  method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
+                  confidence: "HIGH"
+                });
+              }
+            }
+            if (!result.email) {
+              const email = this.extractEmailFromText(fullSnippet);
+              if (email) {
+                result.email = email;
+                result.evidence.push({
+                  field: "email",
+                  value: email,
+                  url: candidate.url,
+                  method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
+                  confidence: "HIGH"
+                });
+              }
+            }
+            if (!result.discoveredWebsite) {
+              const websiteCandidate = this.extractWebsiteFromBio(fullSnippet);
+              if (websiteCandidate) {
+                result.discoveredWebsite = websiteCandidate;
+                result.evidence.push({
+                  field: "website",
+                  value: websiteCandidate,
+                  url: candidate.url,
+                  method: `${candidate.platform?.toUpperCase()} Bio External Link`,
+                  confidence: "HIGH"
+                });
+              }
+            }
+          } catch (err) {
+            await logger.warn("SOCIAL_SCRAPER", `Notice inspecting verified social URL ${candidate.url}: ${err.message}`, { companyName }, "SOCIAL_SCRAPER");
+          }
+        }
+        return result;
+      }
+      static normalizeFacebookUrl(raw) {
+        if (!raw || typeof raw !== "string") return null;
+        let clean = raw.trim();
+        if (clean.length < 2) return null;
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+          clean = clean.replace(/^@/, "").replace(/^facebook\.com\/?/i, "").replace(/^www\.facebook\.com\/?/i, "");
+          if (!clean) return null;
+          clean = `https://www.facebook.com/${clean}`;
+        }
+        try {
+          const u = new URL(clean);
+          if (!u.hostname.includes("facebook.com")) return null;
+          const path4 = u.pathname.replace(/\/+$/, "").toLowerCase();
+          const blockedPaths = ["", "/", "/home", "/login", "/policies", "/help", "/sharer", "/share", "/dialog", "/tr", "/plugins", "/pages"];
+          if (blockedPaths.includes(path4) || path4.length < 2) return null;
+          return `${u.origin}${u.pathname}`;
+        } catch {
+          return null;
+        }
+      }
+      static normalizeInstagramUrl(raw) {
+        if (!raw || typeof raw !== "string") return null;
+        let clean = raw.trim();
+        if (clean.length < 2) return null;
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+          clean = clean.replace(/^@/, "").replace(/^instagram\.com\/?/i, "").replace(/^www\.instagram\.com\/?/i, "").replace(/\/$/, "");
+          if (!clean) return null;
+          clean = `https://www.instagram.com/${clean}/`;
+        }
+        try {
+          const u = new URL(clean);
+          if (!u.hostname.includes("instagram.com")) return null;
+          const path4 = u.pathname.replace(/\/+$/, "").toLowerCase();
+          const blockedPaths = ["", "/", "/p", "/explore", "/stories", "/reels", "/accounts", "/about", "/legal", "/direct"];
+          if (blockedPaths.includes(path4) || path4.length < 2) return null;
+          return `${u.origin}${u.pathname.endsWith("/") ? u.pathname : `${u.pathname}/`}`;
+        } catch {
+          return null;
+        }
+      }
+      static normalizeLinkedInUrl(raw) {
+        if (!raw || typeof raw !== "string") return null;
+        let clean = raw.trim();
+        if (clean.length < 3) return null;
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+          clean = clean.replace(/^@/, "").replace(/^linkedin\.com\/?/i, "").replace(/^www\.linkedin\.com\/?/i, "");
+          if (!clean) return null;
+          clean = clean.startsWith("company/") || clean.startsWith("in/") ? `https://www.linkedin.com/${clean}` : `https://www.linkedin.com/company/${clean}`;
+        }
+        try {
+          const u = new URL(clean);
+          if (!u.hostname.includes("linkedin.com")) return null;
+          const path4 = u.pathname.replace(/\/+$/, "").toLowerCase();
+          if (!path4 || path4 === "/" || path4 === "/company" || path4 === "/in") return null;
+          return `${u.origin}${u.pathname}`;
+        } catch {
+          return null;
+        }
+      }
+      static normalizeTwitterUrl(raw) {
+        if (!raw || typeof raw !== "string") return null;
+        let clean = raw.trim();
+        if (clean.length < 2) return null;
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+          clean = clean.replace(/^@/, "").replace(/^(?:twitter|x)\.com\/?/i, "");
+          if (!clean) return null;
+          clean = `https://x.com/${clean}`;
+        }
+        try {
+          const u = new URL(clean);
+          if (!u.hostname.includes("twitter.com") && !u.hostname.includes("x.com")) return null;
+          const path4 = u.pathname.replace(/\/+$/, "").toLowerCase();
+          const blockedPaths = ["", "/", "/home", "/login", "/intent", "/share", "/search"];
+          if (blockedPaths.includes(path4) || path4.length < 2) return null;
+          return `${u.origin}${u.pathname}`;
+        } catch {
+          return null;
+        }
+      }
+      static extractSocialFromTags(tags, result) {
+        const rawFb = tags["contact:facebook"] || tags.facebook;
+        const cleanFb = this.normalizeFacebookUrl(rawFb);
+        if (cleanFb) {
+          result.socialLinks.facebook = cleanFb;
+          result.evidence.push({ field: "facebook", value: cleanFb, url: cleanFb, method: "OpenStreetMap contact tag", confidence: "HIGH" });
+        }
+        const rawInsta = tags["contact:instagram"] || tags.instagram;
+        const cleanInsta = this.normalizeInstagramUrl(rawInsta);
+        if (cleanInsta) {
+          result.socialLinks.instagram = cleanInsta;
+          result.evidence.push({ field: "instagram", value: cleanInsta, url: cleanInsta, method: "OpenStreetMap contact tag", confidence: "HIGH" });
+        }
+        const rawLi = tags["contact:linkedin"] || tags.linkedin;
+        const cleanLi = this.normalizeLinkedInUrl(rawLi);
+        if (cleanLi) {
+          result.socialLinks.linkedin = cleanLi;
+          result.evidence.push({ field: "linkedin", value: cleanLi, url: cleanLi, method: "OpenStreetMap contact tag", confidence: "HIGH" });
+        }
+        const rawTw = tags["contact:twitter"] || tags.twitter;
+        const cleanTw = this.normalizeTwitterUrl(rawTw);
+        if (cleanTw) {
+          result.socialLinks.twitter = cleanTw;
+          result.evidence.push({ field: "twitter", value: cleanTw, url: cleanTw, method: "OpenStreetMap contact tag", confidence: "HIGH" });
+        }
+        const phone = tags.phone || tags["contact:phone"] || tags["phone:mobile"] || tags.mobile;
+        if (phone && !result.phone) {
+          result.phone = String(phone).trim();
+          result.evidence.push({ field: "phone", value: result.phone, url: "https://www.openstreetmap.org/", method: "OpenStreetMap contact:phone tag", confidence: "HIGH" });
+        }
+        const email = tags.email || tags["contact:email"];
+        if (email && !result.email) {
+          result.email = String(email).trim().toLowerCase();
+          result.evidence.push({ field: "email", value: result.email, url: "https://www.openstreetmap.org/", method: "OpenStreetMap contact:email tag", confidence: "HIGH" });
+        }
+      }
+      static isGenericSocialBoilerplate(text2) {
+        const lower = text2.toLowerCase();
+        const boilerplateKeywords = [
+          "welcome back to instagram",
+          "log in to check out what your friends",
+          "log into facebook",
+          "see posts, photos and more on facebook",
+          "create an account or log in",
+          "join facebook to connect",
+          "login \u2022 instagram",
+          "sign up for facebook"
+        ];
+        return boilerplateKeywords.some((b) => lower.includes(b));
+      }
+      static extractPhoneFromText(text2) {
+        const phoneRegex = /(?:(?:\+|00)(?:[1-9]\d{0,2})[\s.-]*)?(?:\(?\d{1,4}\)?[\s.-]*)?\d{2,4}[\s.-]*\d{2,4}[\s.-]*\d{2,4}/g;
+        const matches = text2.match(phoneRegex);
+        if (!matches) return void 0;
+        for (const match of matches) {
+          const digits = match.replace(/\D/g, "");
+          if (digits.length >= 8 && digits.length <= 13 && !digits.startsWith("0000") && !digits.startsWith("123456")) {
+            return match.trim().replace(/\s+/g, " ");
+          }
+        }
+        return void 0;
+      }
+      static extractEmailFromText(text2) {
+        const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+        const matches = text2.match(emailRegex);
+        if (!matches) return void 0;
+        for (const match of matches) {
+          const email = match.toLowerCase().trim();
+          if (!email.includes("facebook") && !email.includes("instagram") && !email.includes("example.com") && !email.endsWith(".png")) {
+            return email;
+          }
+        }
+        return void 0;
+      }
+      static extractWebsiteFromBio(text2) {
+        const urlRegex = /(?:https?:\/\/|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\/[^\s,)]*)?/g;
+        const matches = text2.match(urlRegex);
+        if (!matches) return void 0;
+        for (const match of matches) {
+          const lower = match.toLowerCase();
+          if (!lower.includes("facebook.com") && !lower.includes("instagram.com") && !lower.includes("fb.me") && !lower.includes("twitter.com") && !lower.includes("x.com") && !lower.includes("bit.ly") && !lower.includes("linktr.ee")) {
+            return match.startsWith("http") ? match : `https://${match}`;
+          }
+        }
+        return void 0;
+      }
+    };
+  }
+});
+
+// src/services/leadService.ts
+var leadService_exports = {};
+__export(leadService_exports, {
+  LeadService: () => LeadService,
+  NormalizationService: () => NormalizationService,
+  ValidationService: () => ValidationService
+});
+import { eq as eq3, and } from "drizzle-orm";
+var NormalizationService, ValidationService, LeadService;
+var init_leadService = __esm({
+  "src/services/leadService.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_socialEnrichmentService();
+    init_chainFilter();
+    NormalizationService = class {
+      static normalizeCompanyName(name) {
+        return name.trim().replace(/\s+/g, " ").toUpperCase();
+      }
+      static normalizeDomain(url) {
+        try {
+          if (!url) return null;
+          let clean = url.trim().toLowerCase();
+          if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+            clean = "http://" + clean;
+          }
+          const urlObj = new URL(clean);
+          let hostname = urlObj.hostname;
+          if (hostname.startsWith("www.")) {
+            hostname = hostname.substring(4);
+          }
+          return hostname;
+        } catch {
+          return null;
+        }
+      }
+      static normalizePhone(phone) {
+        if (!phone) return "";
+        const cleaned = phone.replace(/[^\d+]/g, "");
+        return cleaned;
+      }
+      static formatDisplayPhone(phone, country) {
+        if (!phone) return "";
+        const raw = phone.trim();
+        const digits = raw.replace(/[^\d]/g, "");
+        if (digits.startsWith("33") && digits.length === 11) {
+          const rest = digits.slice(2);
+          return `+33 ${rest[0]} ${rest.slice(1, 3)} ${rest.slice(3, 5)} ${rest.slice(5, 7)} ${rest.slice(7, 9)}`;
+        }
+        if (digits.startsWith("0") && digits.length === 10) {
+          return `${digits.slice(0, 2)} ${digits.slice(2, 4)} ${digits.slice(4, 6)} ${digits.slice(6, 8)} ${digits.slice(8, 10)}`;
+        }
+        if (digits.startsWith("41") && digits.length >= 10) {
+          const rest = digits.slice(2);
+          return `+41 ${rest.slice(0, 2)} ${rest.slice(2, 5)} ${rest.slice(5, 7)} ${rest.slice(7)}`;
+        }
+        if (digits.startsWith("32") && digits.length >= 9) {
+          const rest = digits.slice(2);
+          return `+32 ${rest.slice(0, 1)} ${rest.slice(1, 4)} ${rest.slice(4, 6)} ${rest.slice(6)}`;
+        }
+        return raw;
+      }
+      static normalizeEmail(email) {
+        if (!email) return "";
+        return email.trim().toLowerCase();
+      }
+      static computeDataQuality(data) {
+        let score = 0;
+        const hasPhone = Boolean(data.phone && data.phone.trim().length >= 6);
+        const hasWebsite = Boolean(data.website && data.website.trim().length >= 4);
+        const hasEmail = Boolean(data.email && ValidationService.validateEmail(data.email));
+        const hasAddress = Boolean(data.address && data.address.trim().length >= 6);
+        const hasLegalOrSocial = Boolean(
+          data.notes && (data.notes.includes("SIRET") || data.notes.includes("Dirigeant") || data.notes.includes("WhatsApp")) || data.rawData?.socialLinks && Object.values(data.rawData.socialLinks).some(Boolean)
+        );
+        if (hasPhone) score += 30;
+        if (hasWebsite) score += 25;
+        if (hasEmail) score += 20;
+        if (hasAddress) score += 15;
+        if (hasLegalOrSocial) score += 10;
+        let tier = "D";
+        if (score >= 90) tier = "A+";
+        else if (score >= 75) tier = "A";
+        else if (score >= 50) tier = "B";
+        else if (score >= 30) tier = "C";
+        const confidence = score >= 70 ? "HIGH" : score >= 40 ? "MEDIUM" : "LOW";
+        return {
+          score,
+          confidence,
+          tier,
+          breakdown: {
+            hasPhone,
+            hasWebsite,
+            hasEmail,
+            hasAddress,
+            hasLegalOrSocial
+          }
+        };
+      }
+    };
+    ValidationService = class {
+      static validateEmail(email) {
+        if (!email) return false;
+        const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!re.test(email.trim())) return false;
+        const lower = email.toLowerCase().trim();
+        if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".webp") || lower.endsWith(".svg") || lower.endsWith(".gif")) return false;
+        if (lower.includes("sentry") || lower.includes("wixpress") || lower.includes("example.com") || lower.includes("noreply") || lower.includes("no-reply") || lower.includes("privacy") || lower.includes("mailer-daemon") || lower.includes("postmaster")) return false;
+        return true;
+      }
+      static validatePhone(phone) {
+        if (!phone) return false;
+        const clean = phone.replace(/[^\d]/g, "");
+        return clean.length >= 8 && clean.length <= 15;
+      }
+      static isInvalidBusinessName(name) {
+        if (!name) return true;
+        const trimmed = name.trim();
+        if (trimmed.length < 2) return true;
+        if (!/[a-zA-Z\u00C0-\u024F]/.test(trimmed)) return true;
+        const lower = trimmed.toLowerCase();
+        const genericBlocked = [
+          "unnamed",
+          "unknown",
+          "n/a",
+          "sans nom",
+          "point of interest",
+          "parking",
+          "abri bus",
+          "abribus",
+          "bus stop",
+          "toilettes",
+          "toilet",
+          "wc",
+          "poste",
+          "boite aux lettres",
+          "post box",
+          "distributeur",
+          "atm",
+          "substation",
+          "borne de recharge",
+          "recycling",
+          "poubelle",
+          "banc",
+          "bench",
+          "calvaire",
+          "statue",
+          "monument",
+          "fontaine",
+          "cimetiere",
+          "cemetery",
+          "test",
+          "chantier",
+          "batiment",
+          "building",
+          "residential",
+          "maison",
+          "residence",
+          "immeuble",
+          "arret",
+          "gare",
+          "station service",
+          "station essence",
+          "lavoir",
+          "eglise",
+          "mairie",
+          "salle des fetes",
+          "decheterie",
+          "poste de transformation",
+          "zone artisanale",
+          "rond-point",
+          "taulier",
+          "phone store",
+          "magasin de t\xE9l\xE9phonie mobile",
+          "magasin",
+          "store",
+          "shop",
+          "boutique",
+          "boulangerie",
+          "restaurant",
+          "plombier",
+          "coiffeur",
+          "barbier",
+          "garage",
+          "epicerie",
+          "\xE9picerie",
+          "bar",
+          "caf\xE9",
+          "cafe",
+          "atelier",
+          "cabinet",
+          "bureau",
+          "u1 prospect",
+          "u2 prospect",
+          "pipeline test",
+          "audit test target",
+          "test persistence inc"
+        ];
+        if (genericBlocked.some((b) => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower.startsWith(b + " ") || lower.endsWith(" " + b))) {
+          return true;
+        }
+        if (/^\d+\s+(rue|avenue|boulevard|chemin|allee|route|place|str\.|strasse|gasse|street|road|ave)/i.test(lower)) {
+          return true;
+        }
+        return false;
+      }
+      static isSocialOrDirectoryUrl(url) {
+        if (!url) return false;
+        const lower = url.toLowerCase();
+        const directoryDomains = [
+          "facebook.com",
+          "fb.com",
+          "instagram.com",
+          "linkedin.com",
+          "twitter.com",
+          "x.com",
+          "pagesjaunes.fr",
+          "yellowpages",
+          "yelp.com",
+          "tripadvisor",
+          "google.com/maps",
+          "maps.google",
+          "local.ch",
+          "search.ch",
+          "infobel.com",
+          "societe.com",
+          "manageo.fr",
+          "verif.com"
+        ];
+        return directoryDomains.some((d) => lower.includes(d));
+      }
+      static isVerifiedBusiness(data) {
+        if (this.isInvalidBusinessName(data.companyName)) return false;
+        if (ChainFilter.isChainOrMajorBrand(data.rawData?.tags || {}, data.companyName)) return false;
+        if (!data.city || data.city.trim().length < 2) return false;
+        if (!data.address || data.address.trim().length < 5) return false;
+        const hasPhone = Boolean(data.phone && this.validatePhone(data.phone));
+        const hasWebsite = Boolean(data.website && data.website.trim().length >= 4 && !this.isSocialOrDirectoryUrl(data.website));
+        const hasEmail = Boolean(data.email && this.validateEmail(data.email));
+        if (!hasPhone) return false;
+        if (!hasWebsite && !hasEmail) return false;
+        return true;
+      }
+      static hasValidContact(data) {
+        const hasPhone = Boolean(data.phone && this.validatePhone(data.phone));
+        const hasEmail = Boolean(data.email && this.validateEmail(data.email));
+        return hasPhone || hasEmail;
+      }
+    };
+    LeadService = class {
+      static async createLead(data, campaignId, options) {
+        if (ValidationService.isInvalidBusinessName(data.companyName)) {
+          return { lead: null, status: "rejected_unverified" };
+        }
+        if (!ValidationService.isVerifiedBusiness(data)) {
+          return { lead: null, status: "rejected_unverified" };
+        }
+        const normalizedName = NormalizationService.normalizeCompanyName(data.companyName || "");
+        const normalizedDomain = NormalizationService.normalizeDomain(data.website);
+        const normalizedPhone = NormalizationService.normalizePhone(data.phone);
+        const displayPhone = NormalizationService.formatDisplayPhone(data.phone, data.country);
+        let existingLead = null;
+        if (normalizedDomain) {
+          existingLead = await db.query.leads.findFirst({
+            where: campaignId ? and(eq3(leads.campaignId, campaignId), eq3(leads.normalizedDomain, normalizedDomain)) : eq3(leads.normalizedDomain, normalizedDomain)
+          });
+        }
+        if (!existingLead && normalizedPhone && normalizedPhone.length >= 7) {
+          existingLead = await db.query.leads.findFirst({
+            where: campaignId ? and(eq3(leads.campaignId, campaignId), eq3(leads.normalizedPhone, normalizedPhone)) : eq3(leads.normalizedPhone, normalizedPhone)
+          });
+        }
+        if (!existingLead && normalizedName && (data.city || data.address)) {
+          const conds = [
+            eq3(leads.normalizedCompanyName, normalizedName),
+            data.city ? eq3(leads.city, data.city) : void 0,
+            campaignId ? eq3(leads.campaignId, campaignId) : void 0
+          ].filter(Boolean);
+          existingLead = await db.query.leads.findFirst({
+            where: and(...conds)
+          });
+        }
+        if (existingLead) {
+          return { lead: existingLead, status: "duplicate" };
+        }
+        const rawWebsite = data.website?.trim();
+        const isSocialOrDir = ValidationService.isSocialOrDirectoryUrl(rawWebsite);
+        const hasWebsite = Boolean(rawWebsite && !isSocialOrDir);
+        const qualityReport = NormalizationService.computeDataQuality({
+          phone: displayPhone || data.phone,
+          website: hasWebsite ? rawWebsite : null,
+          email: data.email,
+          address: data.address,
+          notes: data.notes,
+          rawData: data.rawData
+        });
+        const [newLead] = await db.insert(leads).values({
+          campaignId,
+          companyName: data.companyName,
+          normalizedCompanyName: normalizedName,
+          category: data.category,
+          country: data.country,
+          region: data.region,
+          city: data.city,
+          address: data.address,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          phone: displayPhone || data.phone,
+          normalizedPhone: normalizedPhone || null,
+          email: data.email,
+          website: hasWebsite ? rawWebsite : null,
+          normalizedDomain: hasWebsite ? normalizedDomain : null,
+          googleRating: data.googleRating,
+          googleReviews: data.googleReviews,
+          source: data.source || "OpenStreetMap",
+          sourceUrl: data.sourceUrl,
+          discoverySource: data.source || "OpenStreetMap",
+          websiteStatus: hasWebsite ? "verified" : "not_detected",
+          websiteConfidence: hasWebsite ? "HIGH" : "UNKNOWN",
+          dataConfidence: qualityReport.confidence,
+          opportunityScore: qualityReport.score,
+          leadStatus: "NEW"
+        }).returning();
+        const evidenceItems = [];
+        const sourceName = data.source === "CSV" ? "CSV_IMPORT" : "OPENSTREETMAP";
+        if (data.phone) {
+          evidenceItems.push({
+            leadId: newLead.id,
+            fieldName: "phone",
+            value: displayPhone || data.phone,
+            source: sourceName,
+            sourceUrl: data.sourceUrl || null,
+            verified: true,
+            confidence: "HIGH"
+          });
+        }
+        if (data.email) {
+          evidenceItems.push({
+            leadId: newLead.id,
+            fieldName: "email",
+            value: data.email,
+            source: sourceName,
+            sourceUrl: data.sourceUrl || null,
+            verified: true,
+            confidence: "HIGH"
+          });
+        }
+        if (data.address) {
+          evidenceItems.push({
+            leadId: newLead.id,
+            fieldName: "address",
+            value: data.address,
+            source: sourceName,
+            sourceUrl: data.sourceUrl || null,
+            verified: true,
+            confidence: "HIGH"
+          });
+        }
+        if (hasWebsite && rawWebsite) {
+          evidenceItems.push({
+            leadId: newLead.id,
+            fieldName: "website",
+            value: rawWebsite,
+            source: sourceName,
+            sourceUrl: data.sourceUrl || null,
+            verified: true,
+            confidence: "HIGH"
+          });
+        }
+        if (isSocialOrDir && rawWebsite) {
+          const fb = SocialEnrichmentService.normalizeFacebookUrl(rawWebsite);
+          const insta = SocialEnrichmentService.normalizeInstagramUrl(rawWebsite);
+          const li = SocialEnrichmentService.normalizeLinkedInUrl(rawWebsite);
+          const tw = SocialEnrichmentService.normalizeTwitterUrl(rawWebsite);
+          if (fb) {
+            evidenceItems.push({ leadId: newLead.id, fieldName: "facebook", value: fb, source: sourceName, sourceUrl: fb, verified: true, confidence: "HIGH" });
+          } else if (insta) {
+            evidenceItems.push({ leadId: newLead.id, fieldName: "instagram", value: insta, source: sourceName, sourceUrl: insta, verified: true, confidence: "HIGH" });
+          } else if (li) {
+            evidenceItems.push({ leadId: newLead.id, fieldName: "linkedin", value: li, source: sourceName, sourceUrl: li, verified: true, confidence: "HIGH" });
+          } else if (tw) {
+            evidenceItems.push({ leadId: newLead.id, fieldName: "twitter", value: tw, source: sourceName, sourceUrl: tw, verified: true, confidence: "HIGH" });
+          }
+        }
+        if (data.rawData?.openingHours) {
+          evidenceItems.push({
+            leadId: newLead.id,
+            fieldName: "opening_hours",
+            value: data.rawData.openingHours,
+            source: sourceName,
+            sourceUrl: data.sourceUrl || null,
+            verified: true,
+            confidence: "HIGH"
+          });
+        }
+        if (data.rawData?.socialLinks) {
+          Object.entries(data.rawData.socialLinks).forEach(([platform, rawUrl]) => {
+            if (rawUrl && typeof rawUrl === "string") {
+              let cleanUrl = null;
+              if (platform === "facebook") cleanUrl = SocialEnrichmentService.normalizeFacebookUrl(rawUrl);
+              else if (platform === "instagram") cleanUrl = SocialEnrichmentService.normalizeInstagramUrl(rawUrl);
+              else if (platform === "linkedin") cleanUrl = SocialEnrichmentService.normalizeLinkedInUrl(rawUrl);
+              else if (platform === "twitter") cleanUrl = SocialEnrichmentService.normalizeTwitterUrl(rawUrl);
+              if (cleanUrl) {
+                if (!evidenceItems.some((e) => e.fieldName === platform)) {
+                  evidenceItems.push({
+                    leadId: newLead.id,
+                    fieldName: platform,
+                    value: cleanUrl,
+                    source: sourceName,
+                    sourceUrl: cleanUrl,
+                    verified: true,
+                    confidence: "HIGH"
+                  });
+                }
+              }
+            }
+          });
+        }
+        if (evidenceItems.length > 0) {
+          await db.insert(fieldEvidence).values(evidenceItems);
+        }
+        return { lead: newLead, status: "created", qualityReport };
+      }
+    };
+  }
+});
+
 // src/services/gridPartitionService.ts
 var gridPartitionService_exports = {};
 __export(gridPartitionService_exports, {
   GridPartitionService: () => GridPartitionService
 });
-import axios2 from "axios";
+import axios3 from "axios";
 var GridPartitionService;
 var init_gridPartitionService = __esm({
   "src/services/gridPartitionService.ts"() {
@@ -808,7 +1976,7 @@ var init_gridPartitionService = __esm({
         try {
           const cleanLocation = location?.trim();
           if (!cleanLocation) return null;
-          const response = await axios2.get("https://nominatim.openstreetmap.org/search", {
+          const response = await axios3.get("https://nominatim.openstreetmap.org/search", {
             params: {
               q: cleanLocation,
               format: "json",
@@ -875,7 +2043,7 @@ var init_gridPartitionService = __esm({
 
 // src/app.ts
 import express from "express";
-import path2 from "path";
+import path3 from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import * as dotenv from "dotenv";
 
@@ -988,105 +2156,160 @@ async function getOrCreateUser(uid, email, name) {
 // src/services/websiteService.ts
 init_db();
 init_schema();
+init_monitoring();
 import axios from "axios";
-import * as cheerio from "cheerio";
+import * as cheerio2 from "cheerio";
 import https from "https";
 import { eq as eq2 } from "drizzle-orm";
 
-// src/lib/monitoring.ts
-init_db();
-init_schema();
-var logger = {
-  info: async (component, message, metadata, source, requestId) => {
+// src/services/identityService.ts
+import * as cheerio from "cheerio";
+var IdentityService = class {
+  /**
+   * Calculates a similarity score between a business name and a candidate URL/Domain.
+   * Deterministic matching based on word presence, length, and city tokens.
+   */
+  static calculateRelevanceScore(companyName, domainOrUrl, address, city) {
+    let score = 0;
+    let domain = domainOrUrl.toLowerCase();
     try {
-      await db.insert(systemLogs).values({
-        level: "INFO",
-        component,
-        message,
-        metadata,
-        source,
-        requestId
-      });
-    } catch (error) {
-      console.error("Failed to write log to DB:", error);
+      if (domain.startsWith("http")) {
+        domain = new URL(domain).hostname;
+      }
+    } catch {
     }
-  },
-  warn: async (component, message, metadata, source, requestId) => {
-    try {
-      await db.insert(systemLogs).values({
-        level: "WARN",
-        component,
-        message,
-        metadata,
-        source,
-        requestId
-      });
-    } catch (error) {
-      console.error("Failed to write log to DB:", error);
+    domain = domain.replace(/^www\./, "");
+    const cleanCompanyName = companyName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, "");
+    const normalizedDomain = domain.replace(/[^a-z0-9]/g, "");
+    const nameWithoutSpaces = cleanCompanyName.replace(/\s+/g, "");
+    if (nameWithoutSpaces.length >= 4 && normalizedDomain.includes(nameWithoutSpaces)) {
+      score += 65;
+    } else {
+      const stopWords = /* @__PURE__ */ new Set(["the", "and", "llc", "gmbh", "sarl", "sa", "inc", "ltd", "service", "services", "shop", "store"]);
+      const tokens = cleanCompanyName.split(/\s+/).filter((t) => t.length > 2 && !stopWords.has(t));
+      if (tokens.length > 0) {
+        let matched = 0;
+        for (const token of tokens) {
+          if (normalizedDomain.includes(token)) matched++;
+        }
+        score += Math.round(matched / tokens.length * 50);
+      }
     }
-  },
-  error: async (component, message, error, metadata, source, requestId, retryCount) => {
+    if (city) {
+      const cleanCity = city.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (cleanCity.length > 3 && normalizedDomain.includes(cleanCity)) {
+        score += 15;
+      }
+    }
+    return Math.min(score, 100);
+  }
+  /**
+   * Determines the confidence level based on score.
+   */
+  static getConfidence(score) {
+    if (score >= 85) return "VERIFIED";
+    if (score >= 65) return "HIGH";
+    if (score >= 40) return "MEDIUM";
+    if (score >= 20) return "LOW";
+    return "UNKNOWN";
+  }
+  /**
+   * Detects parked, expired, or for-sale domains (e.g. GoDaddy auctions, Sedo, Dan, DomainMarket)
+   */
+  static isParkedOrBrokerDomain(html, url) {
+    const lower = (html || "").toLowerCase();
+    const urlLower = (url || "").toLowerCase();
+    const brokerUrls = ["domainmarket.com", "sedo.com", "dan.com", "afternic.com", "hugedomains.com", "parkingcrew", "bodis.com", "godaddy.com/domainsearch"];
+    if (brokerUrls.some((b) => urlLower.includes(b))) return true;
+    const parkedSignatures = [
+      "buy this domain",
+      "domain for sale",
+      "this domain is for sale",
+      "domain is available for purchase",
+      "domain available for sale",
+      "domain name is for sale",
+      "inquire about this domain",
+      "make an offer on this domain",
+      "the domain is registered without website content",
+      "is parked with",
+      "parked free, courtesy of",
+      "domainmarket.com",
+      "afternic.com",
+      "hugedomains.com",
+      "godaddy auctions",
+      "namecheap parking",
+      "parkingcrew.net",
+      "bodis.com",
+      "sav.com",
+      "ce domaine est en vente",
+      "ce nom de domaine est \xE0 vendre",
+      "domaine \xE0 vendre",
+      "acheter ce nom de domaine",
+      "acheter ce domaine"
+    ];
+    return parkedSignatures.some((sig) => lower.includes(sig));
+  }
+  /**
+   * Deterministic check for website identity using page HTML content.
+   * Matches company name tokens, phone, and city in title, headers, and footer.
+   */
+  static verifyIdentityOnPage(html, companyName, phone, city, url) {
     try {
-      await db.insert(systemLogs).values({
-        level: "ERROR",
-        component,
-        message,
-        errorType: error instanceof Error ? error.name : typeof error === "string" ? error : void 0,
-        metadata: {
-          errorMessage: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : void 0,
-          ...metadata
-        },
-        source,
-        requestId,
-        retryCount
-      });
-    } catch (err) {
-      console.error("Failed to write log to DB:", err);
+      if (this.isParkedOrBrokerDomain(html, url)) {
+        return {
+          match: false,
+          confidence: "LOW",
+          score: 0,
+          evidence: "Parked / For-Sale domain detected (Domain Broker)"
+        };
+      }
+      const $ = cheerio.load(html);
+      const title = $("title").text().toLowerCase();
+      const metaDesc = $('meta[name="description"]').attr("content")?.toLowerCase() || "";
+      const h1Text = $("h1").text().toLowerCase();
+      const bodyText = $("body").text().toLowerCase();
+      const cleanName = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+      const tokens = cleanName.split(/\s+/).filter((t) => t.length > 2);
+      let score = 0;
+      const matchedSignals = [];
+      if (title.includes(cleanName) || h1Text.includes(cleanName)) {
+        score += 55;
+        matchedSignals.push("Full company name in title/h1");
+      } else {
+        const tokensInTitle = tokens.filter((t) => title.includes(t) || metaDesc.includes(t));
+        if (tokens.length > 0 && tokensInTitle.length >= Math.ceil(tokens.length / 2)) {
+          score += 35;
+          matchedSignals.push(`${tokensInTitle.length}/${tokens.length} name tokens in title/meta`);
+        }
+      }
+      if (phone) {
+        const digitsOnly = phone.replace(/[^\d]/g, "");
+        if (digitsOnly.length >= 7) {
+          const bodyDigits = bodyText.replace(/[^\d]/g, "");
+          if (bodyDigits.includes(digitsOnly)) {
+            score += 35;
+            matchedSignals.push(`Phone number ${phone} confirmed on page`);
+          }
+        }
+      }
+      if (city && city.length > 3) {
+        if (bodyText.includes(city.toLowerCase())) {
+          score += 15;
+          matchedSignals.push(`City "${city}" confirmed in page body`);
+        }
+      }
+      const confidence = this.getConfidence(score);
+      return {
+        match: score >= 40,
+        confidence: confidence === "UNKNOWN" ? "LOW" : confidence,
+        score,
+        evidence: matchedSignals.join("; ") || "No identity match confirmed"
+      };
+    } catch {
+      return { match: false, confidence: "LOW", score: 0, evidence: "HTML parsing error" };
     }
   }
 };
-var metrics = {
-  record: async (category, source, status, durationMs, metadata, tokenCount, estimatedCost) => {
-    try {
-      await db.insert(requestMetrics).values({
-        category,
-        source,
-        status,
-        durationMs,
-        tokenCount,
-        estimatedCost,
-        metadata
-      });
-    } catch (error) {
-      console.error("Failed to record metric to DB:", error);
-    }
-  }
-};
-var AI_COSTS = {
-  "gemini-1.5-flash": {
-    input: 125e-6 / 1e3,
-    output: 375e-6 / 1e3
-  },
-  "gemini-1.5-pro": {
-    input: 35e-4 / 1e3,
-    output: 0.0105 / 1e3
-  },
-  "gemini-3.8-flash": {
-    input: 1e-4 / 1e3,
-    // Estimated
-    output: 3e-4 / 1e3
-    // Estimated
-  }
-};
-function estimateAiCost(model, inputTokens, outputTokens) {
-  let modelKey = "gemini-1.5-flash";
-  if (model.includes("3.8-flash")) modelKey = "gemini-3.8-flash";
-  else if (model.includes("pro")) modelKey = "gemini-1.5-pro";
-  const rates = AI_COSTS[modelKey];
-  if (!rates) return 0;
-  return inputTokens * rates.input + outputTokens * rates.output;
-}
 
 // src/services/websiteService.ts
 var WebsiteService = class {
@@ -1130,11 +2353,14 @@ var WebsiteService = class {
           validateStatus: () => true
         });
       } catch (err) {
-        if (err.code?.includes("CERT") || err.message?.includes("certificate") || err.message?.includes("altnames")) {
+        if (err.code?.includes("CERT") || err.message?.includes("certificate") || err.message?.includes("altnames") || err.code === "ERR_TLS_CERT_ALTNAME_INVALID") {
           response = await axios.get(url, {
             timeout: 1e4,
             headers: { "User-Agent": "LeadForge-Audit-Bot/1.0" },
-            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+            httpsAgent: new https.Agent({
+              rejectUnauthorized: false,
+              checkServerIdentity: () => void 0
+            }),
             maxRedirects: 5,
             validateStatus: () => true
           });
@@ -1142,14 +2368,15 @@ var WebsiteService = class {
           throw err;
         }
       }
-      const isReachable = response.status >= 200 && response.status < 500;
+      const isParked = typeof response.data === "string" && IdentityService.isParkedOrBrokerDomain(response.data, url);
+      const isReachable = response.status >= 200 && response.status < 400 && !isParked;
       await db.update(leads).set({
-        websiteStatus: isReachable ? "verified" : "unreachable",
+        websiteStatus: isReachable ? "verified" : isParked ? "not_detected" : "unreachable",
         websiteLastChecked: /* @__PURE__ */ new Date(),
         websiteExists: isReachable
       }).where(eq2(leads.id, leadId));
-      await metrics.record("AUDIT", "WEBSITE_VALIDATION", "SUCCESS", Date.now() - startTime, { leadId, url, status: response.status });
-      return { reachable: isReachable, status: response.status };
+      await metrics.record("AUDIT", "WEBSITE_VALIDATION", "SUCCESS", Date.now() - startTime, { leadId, url, status: response.status, isParked });
+      return { reachable: isReachable, status: response.status, isParked };
     } catch (error) {
       const isTimeout = error.code === "ECONNABORTED";
       await metrics.record("AUDIT", "WEBSITE_VALIDATION", isTimeout ? "TIMEOUT" : "FAILURE", Date.now() - startTime, { leadId, url, error: error.message });
@@ -1183,7 +2410,10 @@ var WebsiteService = class {
     const auditId = auditRecord.id;
     const findings = [];
     const auditMetrics = {};
-    const permissiveAgent = new https.Agent({ rejectUnauthorized: false });
+    const permissiveAgent = new https.Agent({
+      rejectUnauthorized: false,
+      checkServerIdentity: () => void 0
+    });
     try {
       let currentUrl = targetUrl;
       let redirects = 0;
@@ -1204,6 +2434,7 @@ var WebsiteService = class {
               "Accept-Language": "en-US,en;q=0.9",
               "Cache-Control": "no-cache"
             },
+            httpsAgent: sslIssueDetected ? permissiveAgent : void 0,
             maxRedirects: 0,
             validateStatus: () => true
             // Allow all status codes (200, 301, 401, 403, 500)
@@ -1217,10 +2448,10 @@ var WebsiteService = class {
           finalResponse = response;
           break;
         } catch (err) {
-          const isSslCertError = err.code?.includes("CERT") || err.message?.includes("certificate") || err.message?.includes("altnames");
-          if (isSslCertError && !sslIssueDetected) {
+          const isSslCertError = err.code?.includes("CERT") || err.message?.includes("certificate") || err.message?.includes("altnames") || err.code === "ERR_TLS_CERT_ALTNAME_INVALID" || err.code === "DEPTH_ZERO_SELF_SIGNED_CERT";
+          if (isSslCertError) {
             sslIssueDetected = true;
-            sslIssueDetails = err.message;
+            if (!sslIssueDetails) sslIssueDetails = err.message;
             try {
               const fallbackResponse = await axios.get(currentUrl, {
                 timeout: 12e3,
@@ -1252,7 +2483,37 @@ var WebsiteService = class {
       const loadEndTime = Date.now();
       const duration = loadEndTime - startTime;
       const html = typeof finalResponse.data === "string" ? finalResponse.data : "";
-      const $ = cheerio.load(html || "<html><body></body></html>");
+      if (IdentityService.isParkedOrBrokerDomain(html, currentUrl)) {
+        findings.push({
+          category: "Technical",
+          severity: "CRITICAL",
+          title: "Nom de domaine inactif / En vente (Aucun site d\u2019entreprise)",
+          description: "Ce nom de domaine est parqu\xE9 ou mis en vente par un courtier (ex: GoDaddy, Sedo, DomainMarket). Aucun site web actif n\u2019existe pour cette entreprise.",
+          evidence: "Pr\xE9sence de liens d\u2019ench\xE8res, parking ou vente de nom de domaine.",
+          recommendation: "Le prospect n\u2019a aucun site web op\xE9rationnel : opportunit\xE9 directe de cr\xE9ation de site vitrine.",
+          confidence: "HIGH"
+        });
+        await db.insert(auditFindings).values(findings.map((f) => ({ auditId, ...f })));
+        await db.update(audits).set({
+          status: "completed",
+          finalUrl: currentUrl,
+          overallScore: 0,
+          technicalScore: 0,
+          seoScore: 0,
+          conversionScore: 0,
+          localSeoScore: 0,
+          mobileScore: 0,
+          performanceScore: 0,
+          completedAt: /* @__PURE__ */ new Date()
+        }).where(eq2(audits.id, auditId));
+        await db.update(leads).set({
+          websiteStatus: "not_detected",
+          websiteExists: false,
+          auditScore: 0
+        }).where(eq2(leads.id, leadId));
+        return { auditId, overallScore: 0 };
+      }
+      const $ = cheerio2.load(html || "<html><body></body></html>");
       auditMetrics.status = finalResponse.status;
       auditMetrics.ttfb = duration;
       auditMetrics.contentSize = html.length;
@@ -1311,13 +2572,15 @@ var WebsiteService = class {
       const seoScore = this.auditSEO($, findings, auditMetrics);
       const convScore = this.auditConversion($, html, findings, auditMetrics);
       const localSeoScore = this.auditLocalSEO($, findings, auditMetrics);
+      const mobileScore = this.auditMobile($, html, findings);
+      const perfScore = this.calculatePerformanceScore(duration, html.length);
       const scores = {
         technical: techScore,
         seo: seoScore,
         conversion: convScore,
         localSeo: localSeoScore,
-        mobile: null,
-        performance: this.calculatePerformanceScore(duration, html.length)
+        mobile: mobileScore,
+        performance: perfScore
       };
       const weights = {
         technical: 0.2,
@@ -1351,35 +2614,47 @@ var WebsiteService = class {
         seoScore,
         conversionScore: convScore,
         localSeoScore,
-        mobileScore: null,
-        performanceScore: scores.performance,
+        mobileScore,
+        performanceScore: perfScore,
         metrics: auditMetrics,
         completedAt: /* @__PURE__ */ new Date()
       }).where(eq2(audits.id, auditId));
+      await db.update(leads).set({ auditScore: finalOverall }).where(eq2(leads.id, leadId));
       await metrics.record("AUDIT", "WEBSITE", "SUCCESS", Date.now() - startTime, { leadId, auditId, score: finalOverall });
       return { auditId, overallScore: finalOverall };
     } catch (error) {
       const isTimeout = error.code === "ECONNABORTED" || error.message?.includes("timeout");
       const isNetworkIssue = error.code === "ENOTFOUND" || error.code === "ECONNREFUSED" || error.code === "EHOSTUNREACH";
-      if (isTimeout || isNetworkIssue) {
-        if (isTimeout) {
+      const isSslCertError = error.code?.includes("CERT") || error.message?.includes("certificate") || error.message?.includes("altnames") || error.code === "ERR_TLS_CERT_ALTNAME_INVALID";
+      if (isTimeout || isNetworkIssue || isSslCertError) {
+        if (isSslCertError) {
+          findings.push({
+            category: "Security",
+            severity: "CRITICAL",
+            title: "Erreur Certificat SSL / Nom de Domaine Mismatch",
+            description: "Le certificat SSL/TLS ne correspond pas au nom de domaine du site. Les navigateurs (Chrome, Safari, Firefox) bloquent totalement l\u2019acc\xE8s avec un \xE9cran rouge d\u2019avertissement de s\xE9curit\xE9.",
+            evidence: error.message || "Hostname/IP does not match certificate altnames",
+            recommendation: "Installer un certificat SSL/TLS valide (Let\u2019s Encrypt / h\xE9bergeur OVH) correspondant au nom de domaine principal.",
+            confidence: "HIGH"
+          });
+        } else if (isTimeout) {
           findings.push({
             category: "Performance",
             severity: "CRITICAL",
-            title: "Server Response Timeout (>12s)",
-            description: "The website web server failed to respond within 12 seconds. Severe latency or unresponsiveness destroys customer acquisition.",
+            title: "D\xE9lai d\u2019attente serveur d\xE9pass\xE9 (>12s)",
+            description: "Le serveur web n\u2019a pas r\xE9pondu dans le d\xE9lai imparti de 12 secondes.",
             evidence: error.message || "Request timed out after 12000ms",
-            recommendation: "Upgrade to high-performance managed hosting with SSD storage and edge CDN caching.",
+            recommendation: "Migrer vers un h\xE9bergement web performant avec mise en cache CDN.",
             confidence: "HIGH"
           });
         } else {
           findings.push({
             category: "Technical",
             severity: "CRITICAL",
-            title: "Domain DNS or Server Connection Failure",
-            description: "The domain name could not be resolved or the web server refused the connection.",
+            title: "\xC9chec de r\xE9solution DNS ou connexion serveur refus\xE9e",
+            description: "Le nom de domaine n\u2019a pas pu \xEAtre r\xE9solu ou le serveur a refus\xE9 la connexion.",
             evidence: error.message,
-            recommendation: "Check domain DNS records and ensure web hosting server is active.",
+            recommendation: "V\xE9rifier la zone DNS du domaine et s\u2019assurer que le serveur web est d\xE9marr\xE9.",
             confidence: "HIGH"
           });
         }
@@ -1392,18 +2667,19 @@ var WebsiteService = class {
         const fallbackScores = {
           status: "completed",
           finalUrl: targetUrl,
-          overallScore: 20,
-          technicalScore: isTimeout ? 40 : 15,
+          overallScore: isSslCertError ? 25 : 20,
+          technicalScore: isSslCertError ? 10 : isTimeout ? 40 : 15,
           seoScore: null,
           conversionScore: null,
           localSeoScore: null,
           mobileScore: null,
           performanceScore: isTimeout ? 10 : 0,
-          metrics: { status: isTimeout ? 504 : 503, error: error.message, ttfb: isTimeout ? 12e3 : 0 },
+          metrics: { status: isSslCertError ? 526 : isTimeout ? 504 : 503, error: error.message, ttfb: isTimeout ? 12e3 : 0 },
           completedAt: /* @__PURE__ */ new Date()
         };
         await db.update(audits).set(fallbackScores).where(eq2(audits.id, auditId));
-        await metrics.record("AUDIT", "WEBSITE", isTimeout ? "TIMEOUT" : "FAILURE", Date.now() - startTime, { leadId, auditId, error: error.message });
+        await db.update(leads).set({ auditScore: fallbackScores.overallScore }).where(eq2(leads.id, leadId));
+        await metrics.record("AUDIT", "WEBSITE", isTimeout ? "TIMEOUT" : "FAILURE", Date.now() - startTime, { leadId, auditId, error: error.message, isSslCertError });
         return { auditId, overallScore: fallbackScores.overallScore };
       }
       await metrics.record("AUDIT", "WEBSITE", "FAILURE", Date.now() - startTime, { leadId, auditId, error: error.message });
@@ -1417,62 +2693,115 @@ var WebsiteService = class {
     }
   }
   static auditTechnical($, response, findings, metrics2) {
-    let score = 100;
+    let score = 90;
     const url = metrics2.finalUrl || metrics2.targetUrl || "";
     if (url && !url.startsWith("https:")) {
-      score -= 30;
+      score -= 40;
       findings.push({
         category: "Technical",
         severity: "HIGH",
-        title: "HTTPS not enabled",
-        description: "The website does not use a secure HTTPS connection.",
-        evidence: `URL protocol is ${url.split(":")[0]}`,
-        recommendation: "Install an SSL certificate and redirect all HTTP traffic to HTTPS.",
+        title: "Connexion non s\xE9curis\xE9e (HTTP au lieu de HTTPS)",
+        description: "Le site ne force pas le protocole HTTPS s\xE9curis\xE9. Google Chrome et Firefox affichent un avertissement \xAB Non s\xE9curis\xE9 \xBB.",
+        evidence: `Protocole URL: ${url.split(":")[0]}`,
+        recommendation: "Installer un certificat SSL/TLS et forcer la redirection 301 de HTTP vers HTTPS.",
         confidence: "HIGH"
       });
     }
-    const securityHeaders = ["content-security-policy", "strict-transport-security", "x-content-type-options"];
+    if (url.startsWith("https:")) {
+      const mixedContent = $('script[src^="http://"], link[href^="http://"], img[src^="http://"]');
+      if (mixedContent.length > 0) {
+        score -= 15;
+        findings.push({
+          category: "Technical",
+          severity: "MEDIUM",
+          title: "Contenu mixte d\xE9tect\xE9 (Ressources HTTP non s\xE9curis\xE9es)",
+          description: `${mixedContent.length} ressource(s) sont charg\xE9es en HTTP non s\xE9curis\xE9 sur une page HTTPS.`,
+          evidence: `${mixedContent.length} \xE9l\xE9ments avec URL HTTP d\xE9tect\xE9s`,
+          recommendation: "Mettre \xE0 jour tous les liens d\u2019assets vers https://.",
+          confidence: "HIGH"
+        });
+      }
+    }
+    const securityHeaders = [
+      { name: "strict-transport-security", label: "HSTS (Strict-Transport-Security)", penalty: 8 },
+      { name: "x-content-type-options", label: "X-Content-Type-Options", penalty: 6 },
+      { name: "x-frame-options", label: "X-Frame-Options (Protection Clickjacking)", penalty: 8 },
+      { name: "referrer-policy", label: "Referrer-Policy", penalty: 5 }
+    ];
     securityHeaders.forEach((h) => {
-      if (!response.headers[h]) {
-        score -= 5;
+      if (!response.headers[h.name]) {
+        score -= h.penalty;
         findings.push({
           category: "Technical",
           severity: "LOW",
-          title: `Missing security header: ${h}`,
-          description: `The ${h} header was not detected.`,
-          evidence: "Header not found in response.",
-          recommendation: `Implement the ${h} header to improve website security.`,
+          title: `En-t\xEAte de s\xE9curit\xE9 manquant: ${h.label}`,
+          description: `L'en-t\xEAte HTTP ${h.name} n'est pas envoy\xE9 par le serveur.`,
+          evidence: "En-t\xEAte absent de la r\xE9ponse HTTP.",
+          recommendation: `Configurer l'en-t\xEAte ${h.name} au niveau du serveur web (Nginx/Apache/Cloudflare).`,
           confidence: "HIGH"
         });
       }
     });
-    return Math.max(0, score);
+    return Math.max(10, Math.min(100, score));
   }
   static auditSEO($, findings, metrics2) {
-    let score = 100;
+    let score = 90;
     const title = $("title").text().trim();
     if (!title) {
-      score -= 30;
+      score -= 35;
       findings.push({
         category: "SEO",
         severity: "HIGH",
-        title: "Missing SEO Title",
-        description: "No <title> tag was found on the homepage.",
-        evidence: "title element is empty or missing.",
-        recommendation: "Add a unique, descriptive title between 50-60 characters.",
+        title: "Balise <title> manquante",
+        description: "Aucune balise de titre SEO n\u2019a \xE9t\xE9 trouv\xE9e sur la page d\u2019accueil.",
+        evidence: "Balise title vide ou inexistante.",
+        recommendation: "Ajouter une balise <title> unique et optimis\xE9e de 50 \xE0 60 caract\xE8res.",
+        confidence: "HIGH"
+      });
+    } else if (title.length < 25) {
+      score -= 12;
+      findings.push({
+        category: "SEO",
+        severity: "LOW",
+        title: "Titre SEO trop court ou non optimis\xE9",
+        description: `Le titre SEO (\xAB ${title} \xBB) fait seulement ${title.length} caract\xE8res, sans mots-cl\xE9s d'activit\xE9 ou de localisation.`,
+        evidence: `Longueur du titre: ${title.length} caract\xE8res`,
+        recommendation: "\xC9tendre le titre entre 50 et 60 caract\xE8res avec le m\xE9tier et la ville.",
+        confidence: "HIGH"
+      });
+    } else if (title.length > 70) {
+      score -= 8;
+      findings.push({
+        category: "SEO",
+        severity: "LOW",
+        title: "Titre SEO trop long (Risque de troncature Google)",
+        description: `Le titre (${title.length} car.) d\xE9passe la limite d'affichage des r\xE9sultats Google.`,
+        evidence: `Longueur du titre: ${title.length} caract\xE8res`,
+        recommendation: "Raccourcir sous les 65 caract\xE8res.",
         confidence: "HIGH"
       });
     }
-    const description = $('meta[name="description"]').attr("content");
+    const description = $('meta[name="description"]').attr("content")?.trim();
     if (!description) {
-      score -= 20;
+      score -= 25;
       findings.push({
         category: "SEO",
         severity: "MEDIUM",
-        title: "Missing Meta Description",
-        description: "The meta description tag is missing.",
-        evidence: 'meta[name="description"] not found.',
-        recommendation: "Add a meta description that summarizes the page content (150-160 characters).",
+        title: "M\xE9ta-description manquante",
+        description: "La m\xE9ta-description est absente. Google choisira un extrait al\xE9atoire dans le texte.",
+        evidence: 'meta[name="description"] absent.',
+        recommendation: "R\xE9diger une m\xE9ta-description persuasive de 140 \xE0 160 caract\xE8res.",
+        confidence: "HIGH"
+      });
+    } else if (description.length < 60) {
+      score -= 10;
+      findings.push({
+        category: "SEO",
+        severity: "LOW",
+        title: "M\xE9ta-description trop courte",
+        description: `La m\xE9ta-description ne fait que ${description.length} caract\xE8res.`,
+        evidence: `Longueur: ${description.length} caract\xE8res`,
+        recommendation: "D\xE9velopper une proposition de valeur compl\xE8te (140-160 car.).",
         confidence: "HIGH"
       });
     }
@@ -1482,54 +2811,139 @@ var WebsiteService = class {
       findings.push({
         category: "SEO",
         severity: "MEDIUM",
-        title: "No H1 Heading",
-        description: "The page lacks a main H1 heading.",
-        evidence: "0 H1 elements detected.",
-        recommendation: "Add one primary H1 heading containing your main keyword.",
+        title: "Titre principal <h1> manquant",
+        description: "La page n\u2019a aucun titre <h1> pour structurer son sujet principal.",
+        evidence: "0 balise <h1> d\xE9tect\xE9e.",
+        recommendation: "Ajouter un titre <h1> unique ciblant votre activit\xE9 principale.",
         confidence: "HIGH"
       });
     } else if (h1s.length > 1) {
-      score -= 5;
+      score -= 8;
       findings.push({
         category: "SEO",
         severity: "LOW",
-        title: "Multiple H1 Headings",
-        description: "Detected multiple H1 tags on the same page.",
-        evidence: `${h1s.length} H1 elements found.`,
-        recommendation: "Use only one H1 per page for better structural clarity.",
+        title: "Multiples balises <h1> d\xE9tect\xE9es",
+        description: `${h1s.length} balises <h1> trouv\xE9es sur la m\xEAme page.`,
+        evidence: `${h1s.length} \xE9l\xE9ments <h1>`,
+        recommendation: "Ne conserver qu\u2019un seul <h1> par page pour une structure s\xE9mantique claire.",
         confidence: "HIGH"
       });
     }
-    return Math.max(0, score);
+    const ogTitle = $('meta[property="og:title"]').attr("content");
+    const ogImage = $('meta[property="og:image"]').attr("content");
+    if (!ogTitle || !ogImage) {
+      score -= 12;
+      findings.push({
+        category: "SEO",
+        severity: "LOW",
+        title: "Balises Open Graph (Partage R\xE9seaux Sociaux) incompl\xE8tes",
+        description: "Les balises og:title et og:image sont absentes. Les partages sur WhatsApp, Facebook et LinkedIn afficheront un aper\xE7u vide.",
+        evidence: "Balises OpenGraph absentes ou incompl\xE8tes",
+        recommendation: "Configurer les balises OpenGraph pour valoriser les partages sociaux.",
+        confidence: "HIGH"
+      });
+    }
+    const canonical = $('link[rel="canonical"]').attr("href");
+    if (!canonical) {
+      score -= 10;
+      findings.push({
+        category: "SEO",
+        severity: "LOW",
+        title: "Balise Canonical manquante",
+        description: "Aucune URL canonique d\xE9finie pour \xE9viter les probl\xE8mes de contenu dupliqu\xE9.",
+        evidence: 'link[rel="canonical"] absent',
+        recommendation: 'Ajouter une balise <link rel="canonical" href="...">.',
+        confidence: "HIGH"
+      });
+    }
+    const allImgs = $("img");
+    const missingAlt = $('img:not([alt]), img[alt=""]');
+    if (allImgs.length > 2 && missingAlt.length / allImgs.length > 0.3) {
+      score -= 12;
+      findings.push({
+        category: "SEO",
+        severity: "LOW",
+        title: `Images sans texte alternatif (${missingAlt.length}/${allImgs.length})`,
+        description: `${missingAlt.length} image(s) n\u2019ont pas de balise alt descriptive pour les moteurs de recherche et l\u2019accessibilit\xE9.`,
+        evidence: `${missingAlt.length} images sans alt`,
+        recommendation: "Renseigner un attribut alt descriptif sur toutes les images importantes.",
+        confidence: "HIGH"
+      });
+    }
+    return Math.max(10, Math.min(100, score));
   }
   static auditConversion($, html, findings, metrics2) {
     let score = 0;
-    const checks = [
-      { id: "phone", label: "Phone CTA", weight: 20, pattern: /tel:|(?:\+?(\d{1,3}))?[-. (]*(\d{3})[-. )]*(\d{3})[-. ]*(\d{4})(?: *x(\d+))?/ },
-      { id: "email", label: "Email CTA", weight: 20, pattern: /mailto:/ },
-      { id: "form", label: "Contact Form", weight: 20, element: "form" },
-      { id: "whatsapp", label: "WhatsApp", weight: 20, pattern: /wa\.me|whatsapp\.com\/send/ },
-      { id: "booking", label: "Booking System", weight: 20, pattern: /book|appointment|calendly|doctolib/i }
-    ];
-    checks.forEach((check) => {
-      let detected = false;
-      if (check.pattern && check.pattern.test(html)) detected = true;
-      if (check.element && $(check.element).length > 0) detected = true;
-      if (detected) {
-        score += check.weight;
-      } else {
-        findings.push({
-          category: "Conversion",
-          severity: "MEDIUM",
-          title: `${check.label} not detected`,
-          description: `No obvious ${check.label.toLowerCase()} found on the audited page.`,
-          evidence: `Pattern/Element '${check.id}' not found.`,
-          recommendation: `Add a visible ${check.label} to improve conversion rates.`,
-          confidence: "MEDIUM"
-        });
-      }
-    });
-    return score;
+    const lowerHtml = html.toLowerCase();
+    const hasTelLink = $('a[href^="tel:"]').length > 0;
+    const hasPhonePattern = /(?:(?:\+|00)33[\s.-]?|0)[1-9](?:[\s.-]?\d{2}){4}/.test(html) || /(?:\+?(\d{1,3}))?[-. (]*(\d{3})[-. )]*(\d{3})[-. ]*(\d{4})/.test(html);
+    if (hasTelLink || hasPhonePattern) {
+      score += 25;
+    } else {
+      findings.push({
+        category: "Conversion",
+        severity: "MEDIUM",
+        title: "Appel direct 1-clic non d\xE9tect\xE9",
+        description: "Aucun lien d\u2019appel direct (tel:) ou num\xE9ro de t\xE9l\xE9phone imm\xE9diatement cliquable n\u2019a \xE9t\xE9 identifi\xE9 sur la page d\u2019accueil.",
+        evidence: 'Absence de balise <a href="tel:...">',
+        recommendation: "Ajouter un bouton d\u2019appel 1-clic bien visible pour les visiteurs mobiles.",
+        confidence: "HIGH"
+      });
+    }
+    const hasMailto = $('a[href^="mailto:"]').length > 0;
+    const hasEmailInText = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(html) && !lowerHtml.includes("wixpress") && !lowerHtml.includes("sentry");
+    if (hasMailto || hasEmailInText) {
+      score += 20;
+    } else {
+      findings.push({
+        category: "Conversion",
+        severity: "LOW",
+        title: "Email cliquable non d\xE9tect\xE9",
+        description: "Aucun lien mailto: direct n\u2019a \xE9t\xE9 d\xE9tect\xE9 sur la page d\u2019accueil.",
+        evidence: "Absence de lien mailto:",
+        recommendation: "Afficher une adresse email de contact direct ou un lien mailto:.",
+        confidence: "MEDIUM"
+      });
+    }
+    const hasHtmlForm = $("form").length > 0 && ($("form input").length > 0 || $("form textarea").length > 0);
+    const hasFormPlugin = lowerHtml.includes("wpforms") || lowerHtml.includes("contact-form-7") || lowerHtml.includes("formidable") || lowerHtml.includes("gravityforms") || lowerHtml.includes("typeform") || lowerHtml.includes("hubspot") || lowerHtml.includes("tally.so") || lowerHtml.includes("formspree") || lowerHtml.includes("jotform") || lowerHtml.includes("ninja-forms");
+    const hasContactModalOrIframe = $('iframe[src*="form"], iframe[src*="contact"], [class*="contact-form"], [id*="contact-form"]').length > 0;
+    const hasContactPageLink = $('a[href*="contact"]').length > 0;
+    if (hasHtmlForm || hasFormPlugin || hasContactModalOrIframe) {
+      score += 25;
+    } else if (hasContactPageLink) {
+      score += 15;
+    } else {
+      findings.push({
+        category: "Conversion",
+        severity: "HIGH",
+        title: "Formulaire de contact non d\xE9tect\xE9 sur la page d\u2019accueil",
+        description: "Aucun formulaire de devis ou prise de contact interactif n\u2019est pr\xE9sent directement sur la page d\u2019accueil.",
+        evidence: "Aucune balise <form> avec champs de saisie ou widget de contact d\xE9tect\xE9",
+        recommendation: "Int\xE9grer un formulaire de contact simplifi\xE9 au-dessus de la ligne de flottaison.",
+        confidence: "HIGH"
+      });
+    }
+    const hasWhatsApp = /wa\.me|whatsapp\.com\/send|api\.whatsapp/.test(html);
+    const hasMessenger = /m\.me|messenger\.com/.test(html);
+    if (hasWhatsApp || hasMessenger) {
+      score += 15;
+    } else {
+      findings.push({
+        category: "Conversion",
+        severity: "LOW",
+        title: "Canal de messagerie instantan\xE9e (WhatsApp) absent",
+        description: "Aucun bouton de contact WhatsApp ou messagerie directe n\u2019est pr\xE9sent pour les demandes rapides.",
+        evidence: "Absence de lien WhatsApp ou widget chat",
+        recommendation: "Ajouter un bouton WhatsApp flottant pour convertir les visiteurs mobiles.",
+        confidence: "HIGH"
+      });
+    }
+    const hasBooking = /calendly|doctolib|planity|resalib|reserv|rendez-vous|appointment|treatwell|thefork/i.test(html) || $('a[href*="calendly"], a[href*="doctolib"], a[href*="planity"], a[href*="resalib"]').length > 0;
+    if (hasBooking) {
+      score += 15;
+    }
+    return Math.min(100, score);
   }
   static auditLocalSEO($, findings, metrics2) {
     let score = 0;
@@ -1539,7 +2953,9 @@ var WebsiteService = class {
       try {
         const data = JSON.parse($(el).html());
         const types = Array.isArray(data["@type"]) ? data["@type"] : [data["@type"]];
-        if (types.some((t) => t && (t.includes("LocalBusiness") || t.includes("Organization")))) hasLocalSchema = true;
+        if (types.some((t) => t && (t.includes("LocalBusiness") || t.includes("Organization") || t.includes("Store") || t.includes("ProfessionalService")))) {
+          hasLocalSchema = true;
+        }
       } catch {
       }
     });
@@ -1549,39 +2965,96 @@ var WebsiteService = class {
       findings.push({
         category: "Local SEO",
         severity: "MEDIUM",
-        title: "LocalBusiness Schema Missing",
-        description: "Structured data for local business was not detected.",
-        evidence: "No JSON-LD with type LocalBusiness found.",
-        recommendation: "Add LocalBusiness structured data to help search engines understand your location and services.",
+        title: "Donn\xE9es structur\xE9es Schema.org LocalBusiness manquantes",
+        description: "Le balisage Schema.org LocalBusiness n\u2019est pas configur\xE9 pour indiquer explicitement l\u2019adresse, les horaires et l\u2019activit\xE9 aux moteurs de recherche.",
+        evidence: "Aucun script JSON-LD de type LocalBusiness identifi\xE9",
+        recommendation: "Ajouter les donn\xE9es structur\xE9es JSON-LD LocalBusiness pour renforcer la position dans le pack local Google.",
         confidence: "HIGH"
       });
     }
-    const addressKeywords = ["street", "road", "avenue", "address", "city", "zip", "postal"];
+    const addressKeywords = ["rue", "avenue", "boulevard", "chemin", "route", "place", "street", "road", "adresse", "postal", "cedex"];
     const bodyText = $("body").text().toLowerCase();
-    const hasAddress = addressKeywords.some((k) => bodyText.includes(k)) && /\d+/.test(bodyText);
+    const hasAddress = addressKeywords.some((k) => bodyText.includes(k)) && /\d{4,5}/.test(bodyText);
     if (hasAddress) {
       score += 50;
     } else {
       findings.push({
         category: "Local SEO",
-        severity: "MEDIUM",
-        title: "Address not detected",
-        description: "Physical address information was not clearly found.",
-        evidence: "Text analysis failed to find clear address patterns.",
-        recommendation: "Display your business address clearly in the footer or contact page.",
+        severity: "LOW",
+        title: "Adresse postale non explicite dans le texte",
+        description: "L\u2019adresse postale compl\xE8te avec code postal n\u2019est pas facilement identifiable dans le contenu textuel ou le pied de page.",
+        evidence: "Aucune adresse avec code postal reconnue dans le texte visible",
+        recommendation: "Indiquer clairement l\u2019adresse physique et la zone desservie dans le pied de page.",
         confidence: "LOW"
       });
     }
     return score;
   }
+  static auditMobile($, html, findings) {
+    let score = 85;
+    const viewport = $('meta[name="viewport"]').attr("content");
+    if (!viewport) {
+      score -= 50;
+      findings.push({
+        category: "Mobile",
+        severity: "HIGH",
+        title: "Balise Meta Viewport manquante",
+        description: "Le site ne d\xE9finit pas de balise viewport. Les smartphones afficheront la version bureau d\xE9zoom\xE9e.",
+        evidence: 'Balise <meta name="viewport"> absente',
+        recommendation: 'Ajouter <meta name="viewport" content="width=device-width, initial-scale=1">.',
+        confidence: "HIGH"
+      });
+    } else if (!viewport.includes("width=device-width")) {
+      score -= 20;
+      findings.push({
+        category: "Mobile",
+        severity: "MEDIUM",
+        title: "Configuration viewport incompl\xE8te",
+        description: "La balise viewport ne s\u2019adapte pas \xE0 la largeur native du smartphone.",
+        evidence: `meta viewport: "${viewport}"`,
+        recommendation: "Utiliser width=device-width, initial-scale=1.0.",
+        confidence: "HIGH"
+      });
+    }
+    const lower = html.toLowerCase();
+    const hasResponsiveClues = lower.includes("@media") || lower.includes("tailwind") || lower.includes("bootstrap") || lower.includes("col-") || lower.includes("flex") || lower.includes("grid");
+    if (!hasResponsiveClues && html.length > 3e3) {
+      score -= 25;
+      findings.push({
+        category: "Mobile",
+        severity: "HIGH",
+        title: "Absence de framework responsive ou Media Queries d\xE9tect\xE9s",
+        description: "La mise en page semble rigide et peut n\xE9cessiter un zoom horizontal sur mobile.",
+        evidence: "Aucune r\xE8gle @media ou framework CSS responsive d\xE9tect\xE9 dans le code source HTML.",
+        recommendation: "Refondre la mise en page selon une approche Mobile-First.",
+        confidence: "HIGH"
+      });
+    }
+    const hasPictureOrSrcset = $("picture").length > 0 || $("img[srcset]").length > 0;
+    if ($("img").length > 2 && !hasPictureOrSrcset) {
+      score -= 10;
+      findings.push({
+        category: "Mobile",
+        severity: "LOW",
+        title: "Images non dimensionn\xE9es dynamiquement pour mobile (srcset)",
+        description: "Les images ne disposent pas d\u2019attribut srcset pour servir des versions l\xE9g\xE8res adapt\xE9es aux smartphones.",
+        evidence: "Balises <img> sans attribut srcset",
+        recommendation: "Servir des images responsives en format WebP/AVIF via la balise <picture> ou l\u2019attribut srcset.",
+        confidence: "MEDIUM"
+      });
+    }
+    return Math.max(10, Math.min(100, score));
+  }
   static calculatePerformanceScore(duration, size) {
-    let score = 100;
-    if (duration > 5e3) score -= 40;
-    else if (duration > 2e3) score -= 20;
-    else if (duration > 1e3) score -= 5;
-    if (size > 1e6) score -= 30;
-    else if (size > 5e5) score -= 15;
-    return Math.max(0, score);
+    let score = 80;
+    if (duration > 5e3) score -= 45;
+    else if (duration > 3e3) score -= 30;
+    else if (duration > 1800) score -= 20;
+    else if (duration > 900) score -= 10;
+    if (size > 2e6) score -= 35;
+    else if (size > 1e6) score -= 20;
+    else if (size > 4e5) score -= 10;
+    return Math.max(10, Math.min(100, score));
   }
 };
 
@@ -1626,7 +3099,8 @@ var CSVSource = class {
 };
 
 // src/services/sources/osmSource.ts
-import axios3 from "axios";
+init_monitoring();
+import axios4 from "axios";
 
 // src/services/sources/osmCategoryMapper.ts
 var OSMCategoryMapper = class {
@@ -1703,10 +3177,11 @@ var OSMCategoryMapper = class {
           { key: "shop", value: "beauty" }
         ]
       },
-      "law firm": {
+      "lawyer": {
         tags: [
           { key: "office", value: "lawyer" },
-          { key: "office", value: "legal" }
+          { key: "office", value: "legal" },
+          { key: "amenity", value: "lawyer" }
         ]
       },
       "real estate agency": {
@@ -1748,7 +3223,8 @@ var OSMCategoryMapper = class {
       "cafe": {
         tags: [
           { key: "amenity", value: "cafe" },
-          { key: "amenity", value: "coffee_shop" }
+          { key: "amenity", value: "coffee_shop" },
+          { key: "amenity", value: "bar" }
         ]
       },
       "pharmacy": {
@@ -1830,13 +3306,6 @@ var OSMCategoryMapper = class {
           { key: "shop", value: "cosmetics" }
         ]
       },
-      "lawyer": {
-        tags: [
-          { key: "office", value: "lawyer" },
-          { key: "office", value: "legal" },
-          { key: "amenity", value: "lawyer" }
-        ]
-      },
       "carpenter": {
         tags: [
           { key: "craft", value: "carpenter" },
@@ -1890,6 +3359,40 @@ var OSMCategoryMapper = class {
           { key: "healthcare", value: "doctor" },
           { key: "amenity", value: "clinic" }
         ]
+      },
+      "driving school": {
+        tags: [
+          { key: "amenity", value: "driving_school" }
+        ]
+      },
+      "shoemaker": {
+        tags: [
+          { key: "shop", value: "shoemaker" },
+          { key: "craft", value: "shoemaker" }
+        ]
+      },
+      "jewelry": {
+        tags: [
+          { key: "shop", value: "jewelry" },
+          { key: "shop", value: "watches" }
+        ]
+      },
+      "bookstore": {
+        tags: [
+          { key: "shop", value: "books" },
+          { key: "shop", value: "stationery" }
+        ]
+      },
+      "cheese": {
+        tags: [
+          { key: "shop", value: "cheese" },
+          { key: "shop", value: "dairy" }
+        ]
+      },
+      "fishmonger": {
+        tags: [
+          { key: "shop", value: "seafood" }
+        ]
       }
     };
   }
@@ -1904,26 +3407,32 @@ var OSMCategoryMapper = class {
     if (normalized.includes("mecanic") || normalized.includes("garag") || normalized.includes("auto") || normalized.includes("carrosser") || normalized.includes("pneu") || normalized.includes("vidange") || normalized.includes("controle tech") || normalized.includes("depannage auto")) {
       return this.mapping["car mechanic"];
     }
-    if (normalized.includes("plomb") || normalized.includes("chauffag") || normalized.includes("sanitair")) {
+    if (normalized.includes("plomb") || normalized.includes("sanitair") || normalized.includes("tuyauterie")) {
       return this.mapping["plumber"];
     }
-    if (normalized.includes("avocat") || normalized.includes("notair") || normalized.includes("juridiq") || normalized.includes("lawyer") || normalized.includes("legal")) {
+    if (normalized.includes("chauffag") || normalized.includes("climat") || normalized.includes("pompe a chaleur") || normalized.includes("hvac")) {
+      return this.mapping["heating company"];
+    }
+    if (normalized.includes("avocat") || normalized.includes("notair") || normalized.includes("juridiq") || normalized.includes("lawyer") || normalized.includes("legal") || normalized.includes("huissier")) {
       return this.mapping["lawyer"];
     }
     if (normalized.includes("dentist") || normalized.includes("dentair") || normalized.includes("orthodont")) {
       return this.mapping["dentist"];
     }
-    if (normalized.includes("medecin") || normalized.includes("docteur") || normalized.includes("medical") || normalized.includes("cliniq") || normalized.includes("doctor")) {
+    if (normalized.includes("medecin") || normalized.includes("docteur") || normalized.includes("medical") || normalized.includes("cliniq") || normalized.includes("kine") || normalized.includes("osteopath") || normalized.includes("doctor")) {
       return this.mapping["doctor"];
     }
     if (normalized.includes("coiff") || normalized.includes("barbi") || normalized.includes("barber") || normalized.includes("hair")) {
       return this.mapping["hairdresser"];
     }
-    if (normalized.includes("boulang") || normalized.includes("patiss") || normalized.includes("baker") || normalized.includes("pastry")) {
+    if (normalized.includes("boulang") || normalized.includes("patiss") || normalized.includes("viennoiserie") || normalized.includes("baker") || normalized.includes("pastry")) {
       return this.mapping["bakery"];
     }
-    if (normalized.includes("restau") || normalized.includes("brasser") || normalized.includes("pizz") || normalized.includes("bistro") || normalized.includes("creper") || normalized.includes("traiteur")) {
+    if (normalized.includes("restau") || normalized.includes("brasser") || normalized.includes("pizz") || normalized.includes("bistro") || normalized.includes("creper") || normalized.includes("traiteur") || normalized.includes("burger") || normalized.includes("sushi")) {
       return this.mapping["restaurant"];
+    }
+    if (normalized.includes("cafe") || normalized.includes("bar") || normalized.includes("salon de the") || normalized.includes("pub") || normalized.includes("coffee")) {
+      return this.mapping["cafe"];
     }
     if (normalized.includes("pharmac") || normalized.includes("parapharmac") || normalized.includes("chemist")) {
       return this.mapping["pharmacy"];
@@ -1931,19 +3440,25 @@ var OSMCategoryMapper = class {
     if (normalized.includes("electri")) {
       return this.mapping["electrician"];
     }
-    if (normalized.includes("immobili") || normalized.includes("real estate") || normalized.includes("agence immo")) {
+    if (normalized.includes("immobili") || normalized.includes("real estate") || normalized.includes("agence immo") || normalized.includes("syndic")) {
       return this.mapping["real estate agency"];
     }
-    if (normalized.includes("architect")) {
+    if (normalized.includes("architect") || normalized.includes("geometre") || normalized.includes("urbaniste")) {
       return this.mapping["architect"];
     }
-    if (normalized.includes("menuis") || normalized.includes("charpent") || normalized.includes("carpent")) {
+    if (normalized.includes("menuis") || normalized.includes("charpent") || normalized.includes("carpent") || normalized.includes("ebenist")) {
       return this.mapping["carpenter"];
     }
-    if (normalized.includes("peint") || normalized.includes("paint")) {
+    if (normalized.includes("peint") || normalized.includes("paint") || normalized.includes("platr") || normalized.includes("plaquist")) {
       return this.mapping["painter"];
     }
-    if (normalized.includes("informatiq") || normalized.includes("ordinateur") || normalized.includes("logiciel") || normalized.includes("software") || normalized.includes("web")) {
+    if (normalized.includes("couvr") || normalized.includes("toitur") || normalized.includes("zinguerie") || normalized.includes("roofer")) {
+      return this.mapping["roofing"];
+    }
+    if (normalized.includes("jardin") || normalized.includes("paysag") || normalized.includes("elag") || normalized.includes("espaces verts")) {
+      return this.mapping["landscaping"];
+    }
+    if (normalized.includes("informatiq") || normalized.includes("ordinateur") || normalized.includes("logiciel") || normalized.includes("software") || normalized.includes("web") || normalized.includes("agence digitale")) {
       return this.mapping["it services"];
     }
     if (normalized.includes("telephon") || normalized.includes("phone") || normalized.includes("smartphone") || normalized.includes("mobile") || normalized.includes("reparation")) {
@@ -1952,38 +3467,59 @@ var OSMCategoryMapper = class {
     if (normalized.includes("veterin")) {
       return this.mapping["veterinarian"];
     }
-    if (normalized.includes("fleur") || normalized.includes("florist")) {
+    if (normalized.includes("fleur") || normalized.includes("florist") || normalized.includes("horticulteur")) {
       return this.mapping["florist"];
     }
-    if (normalized.includes("optic") || normalized.includes("lunett")) {
+    if (normalized.includes("optic") || normalized.includes("lunett") || normalized.includes("lentille")) {
       return this.mapping["optician"];
     }
-    if (normalized.includes("comptab") || normalized.includes("account")) {
+    if (normalized.includes("comptab") || normalized.includes("account") || normalized.includes("fiscal") || normalized.includes("audit")) {
       return this.mapping["accountant"];
     }
-    if (normalized.includes("serrur") || normalized.includes("locksmith")) {
+    if (normalized.includes("serrur") || normalized.includes("locksmith") || normalized.includes("vitrier") || normalized.includes("metallerie")) {
       return this.mapping["locksmith"];
     }
     if (normalized.includes("press") || normalized.includes("blanchiss") || normalized.includes("laver") || normalized.includes("laundry")) {
       return this.mapping["dry cleaning"];
     }
-    if (normalized.includes("hotel") || normalized.includes("heberg") || normalized.includes("gite") || normalized.includes("auberge")) {
+    if (normalized.includes("hotel") || normalized.includes("heberg") || normalized.includes("gite") || normalized.includes("auberge") || normalized.includes("chambre d hote")) {
       return this.mapping["hotel"];
     }
-    if (normalized.includes("sport") || normalized.includes("fitness") || normalized.includes("muscu") || normalized.includes("gym")) {
+    if (normalized.includes("sport") || normalized.includes("fitness") || normalized.includes("muscu") || normalized.includes("gym") || normalized.includes("yoga") || normalized.includes("pilates")) {
       return this.mapping["gym"];
     }
-    if (normalized.includes("beaut") || normalized.includes("esthetiq") || normalized.includes("ongl") || normalized.includes("spa")) {
+    if (normalized.includes("beaut") || normalized.includes("esthetiq") || normalized.includes("ongl") || normalized.includes("spa") || normalized.includes("massage")) {
       return this.mapping["beauty salon"];
     }
     if (normalized.includes("bouch") || normalized.includes("charcut") || normalized.includes("butcher")) {
       return this.mapping["butcher"];
     }
-    if (normalized.includes("epic") || normalized.includes("superm") || normalized.includes("aliment") || normalized.includes("grocer")) {
+    if (normalized.includes("poisson") || normalized.includes("maree") || normalized.includes("fruits de mer")) {
+      return this.mapping["fishmonger"];
+    }
+    if (normalized.includes("fromag") || normalized.includes("cremerie")) {
+      return this.mapping["cheese"];
+    }
+    if (normalized.includes("epic") || normalized.includes("superm") || normalized.includes("aliment") || normalized.includes("primeur") || normalized.includes("grocer")) {
       return this.mapping["grocery"];
     }
-    if (normalized.includes("nettoy") || normalized.includes("clean")) {
+    if (normalized.includes("nettoy") || normalized.includes("proprete") || normalized.includes("clean")) {
       return this.mapping["cleaning service"];
+    }
+    if (normalized.includes("auto ecole") || normalized.includes("permis") || normalized.includes("conduite")) {
+      return this.mapping["driving school"];
+    }
+    if (normalized.includes("cordonn") || normalized.includes("cle minute")) {
+      return this.mapping["shoemaker"];
+    }
+    if (normalized.includes("bijou") || normalized.includes("horlog")) {
+      return this.mapping["jewelry"];
+    }
+    if (normalized.includes("librair") || normalized.includes("papeterie")) {
+      return this.mapping["bookstore"];
+    }
+    if (normalized.includes("vetement") || normalized.includes("boutique") || normalized.includes("mode") || normalized.includes("pret a porter")) {
+      return this.mapping["boutique"];
     }
     for (const [key, value] of Object.entries(this.mapping)) {
       if (normalized.includes(key) || key.includes(normalized)) {
@@ -2028,571 +3564,19 @@ var OSMCategoryMapper = class {
   }
 };
 
-// src/services/sources/chainFilter.ts
-var ChainFilter = class {
-  static {
-    // Common corporate brands, retail chains, fast-food franchises, and multinational conglomerates
-    this.KNOWN_CHAINS = [
-      // Electronics, Books & Multimedia
-      "fnac",
-      "darty",
-      "boulanger",
-      "apple store",
-      "apple",
-      "mediamarkt",
-      "best buy",
-      "micromania",
-      "nature & decouvertes",
-      "nature et decouvertes",
-      "cultura",
-      "ldlc",
-      // Supermarkets & Hypermarkets & Convenience Stores
-      "carrefour",
-      "carrefour market",
-      "carrefour city",
-      "carrefour express",
-      "carrefour contact",
-      "monoprix",
-      "monop",
-      "monop'",
-      "auchan",
-      "leclerc",
-      "e.leclerc",
-      "intermarche",
-      "intermarch\xE9",
-      "casino",
-      "super u",
-      "hyper u",
-      "u express",
-      "franprix",
-      "lidl",
-      "aldi",
-      "cora",
-      "match",
-      "walmart",
-      "target",
-      "tesco",
-      "sainsbury",
-      "marks & spencer",
-      "costco",
-      "migros",
-      "coop",
-      "denner",
-      "spar",
-      "spar express",
-      "seven eleven",
-      "7-eleven",
-      "carrefour bio",
-      // Fast Food, Coffee & Casual Dining Chains
-      "mcdonald",
-      "mcdonald's",
-      "mcdo",
-      "burger king",
-      "kfc",
-      "subway",
-      "starbucks",
-      "domino",
-      "domino's",
-      "pizza hut",
-      "five guys",
-      "chipotle",
-      "paul",
-      "brioche doree",
-      "brioche dor\xE9e",
-      "columbus cafe",
-      "columbus caf\xE9",
-      "pret a manger",
-      "pr\xEAt \xE0 manger",
-      "costa coffee",
-      "dunkin",
-      "o'tacos",
-      "otacos",
-      "pitaya",
-      "quick",
-      "buffalo grill",
-      "courtepaille",
-      "la boucherie",
-      "hippopotamus",
-      "flunch",
-      "del arte",
-      "pizza del arte",
-      "vapiano",
-      "nando",
-      "nando's",
-      // Fashion, Footwear & Apparel Chains
-      "zara",
-      "h&m",
-      "h & m",
-      "mango",
-      "bershka",
-      "pull&bear",
-      "pull and bear",
-      "stradivarius",
-      "primark",
-      "uniqlo",
-      "celio",
-      "jules",
-      "brice",
-      "etam",
-      "calzedonia",
-      "intimissimi",
-      "tezenis",
-      "kiabi",
-      "gemo",
-      "g\xE9mo",
-      "la halle",
-      "promod",
-      "gap",
-      "levi's",
-      "levis",
-      "foot locker",
-      "courir",
-      "snipes",
-      "jd sports",
-      "decathlon",
-      "intersport",
-      "go sport",
-      "pimkie",
-      "jennyfer",
-      "undiz",
-      "petit bateau",
-      "okaidi",
-      "oka\xEFdi",
-      "sergent major",
-      // Beauty, Cosmetics & Perfumery
-      "sephora",
-      "marionnaud",
-      "yves rocher",
-      "nocibe",
-      "nocib\xE9",
-      "kiko milano",
-      "kiko",
-      "l'occitane",
-      "loccitane",
-      "the body shop",
-      "lush",
-      "mac cosmetics",
-      "ritual",
-      "rituals",
-      // Home, DIY & Furniture
-      "ikea",
-      "leroy merlin",
-      "castorama",
-      "brico depot",
-      "brico d\xE9p\xF4t",
-      "bricorama",
-      "mr bricolage",
-      "conforama",
-      "but",
-      "maisons du monde",
-      "habitat",
-      "alinea",
-      "alin\xE9a",
-      "saint maclou",
-      // Telecom & Tech Operators
-      "orange",
-      "sfr",
-      "bouygues telecom",
-      "bouygues",
-      "free center",
-      "free mobile",
-      "vodafone",
-      "o2",
-      "t-mobile",
-      "at&t",
-      "verizon",
-      "swisscom",
-      "sunrise",
-      "salt store",
-      // Banks & Financial Institutions
-      "bnp paribas",
-      "societe generale",
-      "soci\xE9t\xE9 g\xE9n\xE9rale",
-      "credit agricole",
-      "cr\xE9dit agricole",
-      "lcl",
-      "caisse d'epargne",
-      "caisse d'\xE9pargne",
-      "banque populaire",
-      "credit mutuel",
-      "cr\xE9dit mutuel",
-      "cic",
-      "axa",
-      "allianz",
-      "groupama",
-      "macif",
-      "maif",
-      "matmut",
-      "ubs",
-      "credit suisse",
-      "postfinance",
-      "santander",
-      "bbva",
-      "hsbc",
-      "barclays",
-      "deutsche bank",
-      // Fuel & Automotive Service Chains
-      "total",
-      "totalenergies",
-      "shell",
-      "bp",
-      "esso",
-      "repsol",
-      "eni",
-      "norauto",
-      "feu vert",
-      "midas",
-      "speedy",
-      "point s",
-      "carglass",
-      "euromaster",
-      "avis",
-      "hertz",
-      "sixt",
-      "europcar",
-      // Eyewear Chains
-      "optical center",
-      "alain afflelou",
-      "afflelou",
-      "krys",
-      "grandoptical",
-      "atol",
-      "generale d'optique",
-      "g\xE9n\xE9rale d'optique",
-      "optique 2000",
-      // Frozen Food & Specialty Chain Retail
-      "picard",
-      "naturalia",
-      "biocoop",
-      "bio c' bon",
-      "bio c bon",
-      "la vie claire",
-      // Hotel & Hospitality Chains
-      "ibis",
-      "ibis budget",
-      "ibis styles",
-      "novotel",
-      "mercure",
-      "sofitel",
-      "marriott",
-      "hilton",
-      "best western",
-      "b&b hotels",
-      "premiere classe",
-      "premi\xE8re classe",
-      "campanile",
-      "kyriad",
-      "f1 hotel",
-      "hotel f1",
-      "radisson",
-      "sheraton",
-      "holiday inn"
-    ];
-  }
-  /**
-   * Evaluates whether an OSM entity or raw lead represents a major corporate chain or famous multinational place.
-   */
-  static isChainOrMajorBrand(tags, name) {
-    if (!tags) tags = {};
-    if (tags.brand || tags["brand:wikidata"] || tags["brand:wikipedia"]) {
-      return true;
-    }
-    if (tags.chain === "yes" || tags.franchise === "yes") {
-      return true;
-    }
-    if (tags.network && typeof tags.network === "string" && tags.network.length > 2) {
-      return true;
-    }
-    if (tags.operator && typeof tags.operator === "string") {
-      const op = tags.operator.toLowerCase();
-      for (const chain of this.KNOWN_CHAINS) {
-        if (op.includes(chain)) return true;
-      }
-    }
-    const businessName = (name || tags.name || "").toLowerCase().trim();
-    if (!businessName) return false;
-    const cleanBusinessName = businessName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['’]/g, "");
-    for (const chain of this.KNOWN_CHAINS) {
-      const cleanChain = chain.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['’]/g, "");
-      const regex = new RegExp(`(^|\\s|[^a-z0-9])${cleanChain}($|\\s|[^a-z0-9])`, "i");
-      if (regex.test(cleanBusinessName) || cleanBusinessName.startsWith(cleanChain + " ") || cleanBusinessName === cleanChain) {
-        return true;
-      }
-    }
-    if (tags.amenity === "police" || tags.amenity === "fire_station" || tags.amenity === "embassy" || tags.amenity === "courthouse" || tags.amenity === "townhall" || tags.public_transport) {
-      return true;
-    }
-    return false;
-  }
-};
-
-// src/services/leadService.ts
-init_db();
-init_schema();
-import { eq as eq3, and } from "drizzle-orm";
-var NormalizationService = class {
-  static normalizeCompanyName(name) {
-    return name.trim().replace(/\s+/g, " ").toUpperCase();
-  }
-  static normalizeDomain(url) {
-    try {
-      if (!url) return null;
-      let clean = url.trim().toLowerCase();
-      if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
-        clean = "http://" + clean;
-      }
-      const urlObj = new URL(clean);
-      let hostname = urlObj.hostname;
-      if (hostname.startsWith("www.")) {
-        hostname = hostname.substring(4);
-      }
-      return hostname;
-    } catch {
-      return null;
-    }
-  }
-  static normalizePhone(phone) {
-    if (!phone) return "";
-    const cleaned = phone.replace(/[^\d+]/g, "");
-    return cleaned;
-  }
-  static normalizeEmail(email) {
-    if (!email) return "";
-    return email.trim().toLowerCase();
-  }
-};
-var ValidationService = class {
-  static validateEmail(email) {
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!re.test(email)) return false;
-    const lower = email.toLowerCase();
-    if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".webp") || lower.endsWith(".svg")) return false;
-    if (lower.includes("sentry") || lower.includes("wixpress") || lower.includes("example.com")) return false;
-    return true;
-  }
-  static validatePhone(phone) {
-    const clean = phone.replace(/[^\d]/g, "");
-    return clean.length >= 7 && clean.length <= 15;
-  }
-  static isInvalidBusinessName(name) {
-    if (!name) return true;
-    const trimmed = name.trim();
-    if (trimmed.length < 2) return true;
-    if (!/[a-zA-Z\u00C0-\u024F]/.test(trimmed)) return true;
-    const lower = trimmed.toLowerCase();
-    const genericBlocked = [
-      "unnamed",
-      "unknown",
-      "n/a",
-      "sans nom",
-      "point of interest",
-      "parking",
-      "abri bus",
-      "bus stop",
-      "toilettes",
-      "toilet",
-      "wc",
-      "poste",
-      "boite aux lettres",
-      "post box",
-      "distributeur",
-      "atm",
-      "substation",
-      "borne de recharge",
-      "recycling",
-      "poubelle",
-      "banc",
-      "bench",
-      "calvaire",
-      "statue",
-      "monument",
-      "fontaine",
-      "cimetiere",
-      "cemetery",
-      "test",
-      "chantier",
-      "batiment",
-      "building",
-      "residential",
-      "maison",
-      "residence",
-      "immeuble",
-      "arret",
-      "gare",
-      "station service",
-      "station essence",
-      "lavoir",
-      "eglise"
-    ];
-    if (genericBlocked.some((b) => lower === b || lower === `le ${b}` || lower === `la ${b}` || lower.startsWith(b + " ") || lower.endsWith(" " + b))) {
-      return true;
-    }
-    if (/^\d+\s+(rue|avenue|boulevard|chemin|allee|route|place|str\.|strasse|gasse|street|road|ave)/i.test(lower)) {
-      return true;
-    }
-    return false;
-  }
-  static isVerifiedBusiness(data, strictContact = false) {
-    if (this.isInvalidBusinessName(data.companyName)) return false;
-    const hasPhone = Boolean(data.phone && data.phone.trim().length >= 6);
-    const hasWebsite = Boolean(data.website && data.website.trim().length >= 4);
-    const hasEmail = Boolean(data.email && this.validateEmail(data.email));
-    const hasAddress = Boolean(data.address && data.address.trim().length >= 6);
-    if (strictContact) {
-      return hasPhone || hasWebsite || hasEmail;
-    }
-    return hasPhone || hasWebsite || hasEmail || hasAddress;
-  }
-};
-var LeadService = class {
-  static async createLead(data, campaignId, options) {
-    if (ValidationService.isInvalidBusinessName(data.companyName)) {
-      return { lead: null, status: "rejected_unverified" };
-    }
-    if (options?.requireVerifiedContact && !ValidationService.isVerifiedBusiness(data, true)) {
-      return { lead: null, status: "rejected_unverified" };
-    }
-    const normalizedName = NormalizationService.normalizeCompanyName(data.companyName || "");
-    const normalizedDomain = NormalizationService.normalizeDomain(data.website);
-    const normalizedPhone = NormalizationService.normalizePhone(data.phone);
-    let existingLead = null;
-    if (normalizedDomain) {
-      existingLead = await db.query.leads.findFirst({
-        where: campaignId ? and(eq3(leads.campaignId, campaignId), eq3(leads.normalizedDomain, normalizedDomain)) : eq3(leads.normalizedDomain, normalizedDomain)
-      });
-    }
-    if (!existingLead && normalizedPhone && normalizedPhone.length >= 7) {
-      existingLead = await db.query.leads.findFirst({
-        where: campaignId ? and(eq3(leads.campaignId, campaignId), eq3(leads.normalizedPhone, normalizedPhone)) : eq3(leads.normalizedPhone, normalizedPhone)
-      });
-    }
-    if (!existingLead && normalizedName && (data.city || data.address)) {
-      const conds = [
-        eq3(leads.normalizedCompanyName, normalizedName),
-        data.city ? eq3(leads.city, data.city) : void 0,
-        campaignId ? eq3(leads.campaignId, campaignId) : void 0
-      ].filter(Boolean);
-      existingLead = await db.query.leads.findFirst({
-        where: and(...conds)
-      });
-    }
-    if (existingLead) {
-      return { lead: existingLead, status: "duplicate" };
-    }
-    const hasWebsite = Boolean(data.website);
-    const hasPhone = Boolean(data.phone);
-    const [newLead] = await db.insert(leads).values({
-      campaignId,
-      companyName: data.companyName,
-      normalizedCompanyName: normalizedName,
-      category: data.category,
-      country: data.country,
-      region: data.region,
-      city: data.city,
-      address: data.address,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      phone: data.phone,
-      normalizedPhone: normalizedPhone || null,
-      email: data.email,
-      website: data.website,
-      normalizedDomain,
-      googleRating: data.googleRating,
-      googleReviews: data.googleReviews,
-      source: data.source || "OpenStreetMap",
-      sourceUrl: data.sourceUrl,
-      discoverySource: data.source || "OpenStreetMap",
-      websiteStatus: hasWebsite ? data.website?.includes("facebook.com") || data.website?.includes("instagram.com") || data.website?.includes("linkedin.com") ? "social_profile" : "verified" : "unknown",
-      websiteConfidence: hasWebsite ? "HIGH" : "UNKNOWN",
-      dataConfidence: hasWebsite && hasPhone ? "HIGH" : hasWebsite || hasPhone ? "MEDIUM" : "LOW",
-      leadStatus: "NEW"
-    }).returning();
-    const evidenceItems = [];
-    const sourceName = data.source === "CSV" ? "CSV_IMPORT" : "OPENSTREETMAP";
-    if (data.phone) {
-      evidenceItems.push({
-        leadId: newLead.id,
-        fieldName: "phone",
-        value: data.phone,
-        source: sourceName,
-        sourceUrl: data.sourceUrl || null,
-        verified: true,
-        confidence: "HIGH"
-      });
-    }
-    if (data.email) {
-      evidenceItems.push({
-        leadId: newLead.id,
-        fieldName: "email",
-        value: data.email,
-        source: sourceName,
-        sourceUrl: data.sourceUrl || null,
-        verified: true,
-        confidence: "HIGH"
-      });
-    }
-    if (data.address) {
-      evidenceItems.push({
-        leadId: newLead.id,
-        fieldName: "address",
-        value: data.address,
-        source: sourceName,
-        sourceUrl: data.sourceUrl || null,
-        verified: true,
-        confidence: "HIGH"
-      });
-    }
-    if (data.website) {
-      evidenceItems.push({
-        leadId: newLead.id,
-        fieldName: "website",
-        value: data.website,
-        source: sourceName,
-        sourceUrl: data.sourceUrl || null,
-        verified: true,
-        confidence: "HIGH"
-      });
-    }
-    if (data.rawData?.openingHours) {
-      evidenceItems.push({
-        leadId: newLead.id,
-        fieldName: "opening_hours",
-        value: data.rawData.openingHours,
-        source: sourceName,
-        sourceUrl: data.sourceUrl || null,
-        verified: true,
-        confidence: "HIGH"
-      });
-    }
-    if (data.rawData?.socialLinks) {
-      Object.entries(data.rawData.socialLinks).forEach(([platform, url]) => {
-        if (url && typeof url === "string") {
-          evidenceItems.push({
-            leadId: newLead.id,
-            fieldName: platform,
-            value: url,
-            source: sourceName,
-            sourceUrl: url,
-            verified: true,
-            confidence: "HIGH"
-          });
-        }
-      });
-    }
-    if (evidenceItems.length > 0) {
-      await db.insert(fieldEvidence).values(evidenceItems);
-    }
-    return { lead: newLead, status: "created" };
-  }
-};
-
 // src/services/sources/osmSource.ts
+init_chainFilter();
+init_leadService();
+init_socialEnrichmentService();
+var queryCache = /* @__PURE__ */ new Map();
+var CACHE_TTL_MS = 60 * 60 * 1e3;
 var OSMSource = class {
   constructor() {
     this.overpassUrls = [
       "https://lz4.overpass-api.de/api/interpreter",
       "https://overpass-api.de/api/interpreter",
-      "https://overpass.kumi.systems/api/interpreter"
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
     ];
   }
   async search(criteria) {
@@ -2601,6 +3585,11 @@ var OSMSource = class {
     const city = criteria.city ? criteria.city.trim() : void 0;
     const category = criteria.category ? criteria.category.trim() : void 0;
     const { limit = 50, bbox } = criteria;
+    const cacheKey = `${(category || "").toLowerCase()}:${(city || "").toLowerCase()}:${(country || "").toLowerCase()}:${bbox ? `${bbox.minLat.toFixed(3)},${bbox.minLon.toFixed(3)}` : ""}:${criteria.localOnly}:${criteria.requireContactInfo}`;
+    const cached = queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return cached.leads.slice(0, limit);
+    }
     let activeBbox = bbox;
     if (!activeBbox && (city || country)) {
       try {
@@ -2635,7 +3624,7 @@ var OSMSource = class {
       return part.replace(";", "(area.searchArea);");
     });
     const query = `
-      [out:json][timeout:25]${bboxDecl};
+      [out:json][timeout:15]${bboxDecl};
       ${activeBbox ? "" : areaPart}
       (
         ${finalQueryParts.join("\n        ")}
@@ -2649,13 +3638,13 @@ var OSMSource = class {
       for (const endpoint of this.overpassUrls) {
         attemptCount++;
         try {
-          response = await axios3.post(endpoint, "data=" + encodeURIComponent(query), {
+          response = await axios4.post(endpoint, "data=" + encodeURIComponent(query), {
             headers: {
               "Content-Type": "application/x-www-form-urlencoded",
-              "User-Agent": "LeadForge-Discovery/2.0",
+              "User-Agent": "LeadForge-Discovery/2.5",
               "Referer": "https://leadforge.app/"
             },
-            timeout: 18e3
+            timeout: 11e3
           });
           if (response?.data?.elements) {
             if (attemptCount > 1) {
@@ -2676,7 +3665,7 @@ var OSMSource = class {
             criteria,
             isTimeout
           }, "OSM_API");
-          await new Promise((resolve) => setTimeout(resolve, 800));
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
       }
       if (!response?.data && lastError) {
@@ -2701,22 +3690,32 @@ var OSMSource = class {
         const address = [street, houseNr, postcode].filter(Boolean).join(" ").trim();
         const lat = el.lat ?? el.center?.lat;
         const lon = el.lon ?? el.center?.lon;
-        const phone = tags.phone || tags["contact:phone"] || tags["phone:mobile"] || tags.mobile || tags["contact:mobile"] || tags["telephone"] || tags["contact:telephone"] || tags.tel;
-        const officialWebsite = tags.website || tags["contact:website"] || tags.url || tags["contact:url"] || tags["contact:web"] || tags["website:official"] || tags["website:menu"];
-        const socialFb = tags["contact:facebook"] || tags.facebook;
-        const socialInsta = tags["contact:instagram"] || tags.instagram;
-        const socialLinkedin = tags["contact:linkedin"] || tags.linkedin;
-        const socialTwitter = tags["contact:twitter"] || tags.twitter;
-        const website = officialWebsite || socialFb || socialInsta || socialLinkedin;
-        const email = tags.email || tags["contact:email"] || tags["email:contact"];
+        const rawPhone = tags.phone || tags["contact:phone"] || tags["phone:mobile"] || tags.mobile || tags["contact:mobile"] || tags["telephone"] || tags["contact:telephone"] || tags.tel;
+        const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : void 0;
+        const rawWebCandidate = tags.website || tags["contact:website"] || tags.url || tags["contact:url"] || tags["contact:web"] || tags["website:official"] || tags["website:menu"];
+        const normalizedFb = SocialEnrichmentService.normalizeFacebookUrl(tags["contact:facebook"] || tags.facebook || (rawWebCandidate?.includes("facebook.com") ? rawWebCandidate : void 0));
+        const normalizedInsta = SocialEnrichmentService.normalizeInstagramUrl(tags["contact:instagram"] || tags.instagram || (rawWebCandidate?.includes("instagram.com") ? rawWebCandidate : void 0));
+        const normalizedLi = SocialEnrichmentService.normalizeLinkedInUrl(tags["contact:linkedin"] || tags.linkedin || (rawWebCandidate?.includes("linkedin.com") ? rawWebCandidate : void 0));
+        const normalizedTw = SocialEnrichmentService.normalizeTwitterUrl(tags["contact:twitter"] || tags.twitter || (rawWebCandidate?.includes("twitter.com") || rawWebCandidate?.includes("x.com") ? rawWebCandidate : void 0));
+        let cleanOfficialWebsite = void 0;
+        if (rawWebCandidate && !ValidationService.isSocialOrDirectoryUrl(rawWebCandidate)) {
+          cleanOfficialWebsite = rawWebCandidate.trim();
+        }
+        const rawEmail = tags.email || tags["contact:email"] || tags["email:contact"];
+        const email = rawEmail && ValidationService.validateEmail(String(rawEmail)) ? String(rawEmail).trim().toLowerCase() : void 0;
         const openingHours = tags.opening_hours || tags["contact:opening_hours"];
-        const hasDirectContact = Boolean(phone || website || email);
-        if (criteria.requireContactInfo !== false && !hasDirectContact) {
+        if (ValidationService.isInvalidBusinessName(tags.name)) {
           continue;
         }
-        if (!hasDirectContact && (!address || address.length < 5)) {
+        const hasDirectContact = Boolean(phone || cleanOfficialWebsite || email || normalizedFb || normalizedInsta);
+        if (!hasDirectContact) {
           continue;
         }
+        const validSocialLinks = {};
+        if (normalizedFb) validSocialLinks.facebook = normalizedFb;
+        if (normalizedInsta) validSocialLinks.instagram = normalizedInsta;
+        if (normalizedLi) validSocialLinks.linkedin = normalizedLi;
+        if (normalizedTw) validSocialLinks.twitter = normalizedTw;
         results.push({
           source: "osm",
           sourceId: `${el.type}/${el.id}`,
@@ -2725,21 +3724,16 @@ var OSMSource = class {
           category: tags.shop || tags.amenity || tags.office || tags.craft || category,
           city: tags["addr:city"] || city,
           address: address || void 0,
-          phone: phone ? String(phone).trim() : void 0,
-          website: website ? String(website).trim() : void 0,
-          email: email ? String(email).trim() : void 0,
+          phone,
+          website: cleanOfficialWebsite,
+          email,
           latitude: lat,
           longitude: lon,
           rawData: {
             ...el,
             chainsExcludedCount,
             openingHours,
-            socialLinks: {
-              facebook: socialFb,
-              instagram: socialInsta,
-              linkedin: socialLinkedin,
-              twitter: socialTwitter
-            }
+            socialLinks: validSocialLinks
           }
         });
       }
@@ -2751,13 +3745,16 @@ var OSMSource = class {
           console.warn("Nominatim fallback query failed:", e.message);
         }
       }
+      queryCache.set(cacheKey, { leads: results, timestamp: Date.now() });
       await logger.info("OSM", `OSM Search returned ${results.length} leads`, { criteria, count: results.length }, "OSM_API");
       return results;
     } catch (error) {
       await logger.error("OSM", "OSM Search failed completely", error, { criteria }, "OSM_API");
       if ((criteria.city || criteria.country) && criteria.category) {
         try {
-          return await this.searchNominatim(criteria.category, criteria.city, criteria.country, criteria.limit || 50);
+          const fallbackResults = await this.searchNominatim(criteria.category, criteria.city, criteria.country, criteria.limit || 50);
+          queryCache.set(cacheKey, { leads: fallbackResults, timestamp: Date.now() });
+          return fallbackResults;
         } catch {
         }
       }
@@ -2778,9 +3775,9 @@ var OSMSource = class {
     for (const q of queries) {
       if (leads2.length >= limit) break;
       try {
-        const res = await axios3.get(q, {
-          headers: { "User-Agent": "LeadForge-Discovery/2.0" },
-          timeout: 8e3
+        const res = await axios4.get(q, {
+          headers: { "User-Agent": "LeadForge-Discovery/2.5" },
+          timeout: 6e3
         });
         if (Array.isArray(res.data)) {
           for (const item of res.data) {
@@ -2845,123 +3842,90 @@ var SourceRegistry = class {
 };
 
 // src/services/jobService.ts
+init_leadService();
 init_gridPartitionService();
 
-// src/services/identityService.ts
-import * as cheerio2 from "cheerio";
-var IdentityService = class {
+// src/services/enrichmentBot.ts
+init_monitoring();
+init_socialEnrichmentService();
+import axios5 from "axios";
+import * as cheerio4 from "cheerio";
+import https3 from "https";
+
+// src/services/scraplingService.ts
+init_monitoring();
+import { execFile } from "child_process";
+import path2 from "path";
+import { promisify } from "util";
+var execFileAsync = promisify(execFile);
+var ScraplingService = class {
+  static {
+    this.SCRIPT_PATH = path2.resolve(process.cwd(), "scripts", "scrapling_crawler.py");
+  }
   /**
-   * Calculates a similarity score between a business name and a candidate URL/Domain.
-   * Deterministic matching based on word presence, length, and city tokens.
+   * Health check to verify that Python3 and the Scrapling framework are functional.
    */
-  static calculateRelevanceScore(companyName, domainOrUrl, address, city) {
-    let score = 0;
-    let domain = domainOrUrl.toLowerCase();
+  static async isReady() {
     try {
-      if (domain.startsWith("http")) {
-        domain = new URL(domain).hostname;
-      }
+      const { stdout } = await execFileAsync("python3", [
+        "-c",
+        'import sys; sys.path.insert(0, "./scrapling-repo"); import scrapling; print(scrapling.__version__)'
+      ], { timeout: 4e3 });
+      return stdout.trim().length > 0;
     } catch {
+      return false;
     }
-    domain = domain.replace(/^www\./, "");
-    const cleanCompanyName = companyName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, "");
-    const normalizedDomain = domain.replace(/[^a-z0-9]/g, "");
-    const nameWithoutSpaces = cleanCompanyName.replace(/\s+/g, "");
-    if (nameWithoutSpaces.length >= 4 && normalizedDomain.includes(nameWithoutSpaces)) {
-      score += 65;
-    } else {
-      const stopWords = /* @__PURE__ */ new Set(["the", "and", "llc", "gmbh", "sarl", "sa", "inc", "ltd", "service", "services", "shop", "store"]);
-      const tokens = cleanCompanyName.split(/\s+/).filter((t) => t.length > 2 && !stopWords.has(t));
-      if (tokens.length > 0) {
-        let matched = 0;
-        for (const token of tokens) {
-          if (normalizedDomain.includes(token)) matched++;
-        }
-        score += Math.round(matched / tokens.length * 50);
-      }
-    }
-    if (city) {
-      const cleanCity = city.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (cleanCity.length > 3 && normalizedDomain.includes(cleanCity)) {
-        score += 15;
-      }
-    }
-    return Math.min(score, 100);
   }
   /**
-   * Determines the confidence level based on score.
+   * Performs an anti-bot stealth crawl on targetUrl using D4Vinci/Scrapling.
    */
-  static getConfidence(score) {
-    if (score >= 85) return "VERIFIED";
-    if (score >= 65) return "HIGH";
-    if (score >= 40) return "MEDIUM";
-    if (score >= 20) return "LOW";
-    return "UNKNOWN";
-  }
-  /**
-   * Deterministic check for website identity using page HTML content.
-   * Matches company name tokens, phone, and city in title, headers, and footer.
-   */
-  static verifyIdentityOnPage(html, companyName, phone, city) {
+  static async crawl(targetUrl) {
+    const startTime = Date.now();
     try {
-      const $ = cheerio2.load(html);
-      const title = $("title").text().toLowerCase();
-      const metaDesc = $('meta[name="description"]').attr("content")?.toLowerCase() || "";
-      const h1Text = $("h1").text().toLowerCase();
-      const bodyText = $("body").text().toLowerCase();
-      const cleanName = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
-      const tokens = cleanName.split(/\s+/).filter((t) => t.length > 2);
-      let score = 0;
-      const matchedSignals = [];
-      if (title.includes(cleanName) || h1Text.includes(cleanName)) {
-        score += 55;
-        matchedSignals.push("Full company name in title/h1");
-      } else {
-        const tokensInTitle = tokens.filter((t) => title.includes(t) || metaDesc.includes(t));
-        if (tokens.length > 0 && tokensInTitle.length >= Math.ceil(tokens.length / 2)) {
-          score += 35;
-          matchedSignals.push(`${tokensInTitle.length}/${tokens.length} name tokens in title/meta`);
+      const { stdout, stderr } = await execFileAsync(
+        "python3",
+        [this.SCRIPT_PATH, targetUrl],
+        {
+          timeout: 2e4,
+          maxBuffer: 10 * 1024 * 1024
+        }
+      );
+      const lines = stdout.trim().split("\n");
+      let jsonStr = "";
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith("{") && line.endsWith("}")) {
+          jsonStr = line;
+          break;
         }
       }
-      if (phone) {
-        const digitsOnly = phone.replace(/[^\d]/g, "");
-        if (digitsOnly.length >= 7) {
-          const bodyDigits = bodyText.replace(/[^\d]/g, "");
-          if (bodyDigits.includes(digitsOnly)) {
-            score += 35;
-            matchedSignals.push(`Phone number ${phone} confirmed on page`);
-          }
-        }
+      if (!jsonStr) {
+        throw new Error("No JSON output returned from Scrapling crawler");
       }
-      if (city && city.length > 3) {
-        if (bodyText.includes(city.toLowerCase())) {
-          score += 15;
-          matchedSignals.push(`City "${city}" confirmed in page body`);
-        }
-      }
-      const confidence = this.getConfidence(score);
+      const parsed = JSON.parse(jsonStr);
+      await logger.info("SCRAPLING", `Scrapling crawled ${targetUrl} in ${Date.now() - startTime}ms`, {
+        url: targetUrl,
+        success: parsed.success,
+        contactsFound: (parsed.data?.phones?.length || 0) + (parsed.data?.emails?.length || 0)
+      }, "SCRAPLING_BOT");
+      return parsed;
+    } catch (err) {
+      await logger.warn("SCRAPLING", `Scrapling crawl failed for ${targetUrl}: ${err.message}`, {
+        url: targetUrl,
+        error: err.message
+      }, "SCRAPLING_BOT");
       return {
-        match: score >= 40,
-        confidence: confidence === "UNKNOWN" ? "LOW" : confidence,
-        score,
-        evidence: matchedSignals.join("; ") || "No identity match confirmed"
+        success: false,
+        error: err.message
       };
-    } catch {
-      return { match: false, confidence: "LOW", score: 0, evidence: "HTML parsing error" };
     }
   }
 };
 
 // src/services/enrichmentBot.ts
-import axios4 from "axios";
-import * as cheerio3 from "cheerio";
-import https2 from "https";
 var EnrichmentBot = class {
   static {
-    this.MAX_PAGES = 6;
-  }
-  static {
-    this.USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 (compatible; LeadForge-Bot/2.0; +https://leadforge.app/)";
+    this.USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (compatible; LeadForge-Bot/2.5; +https://leadforge.app/)";
   }
   static async enrich(url) {
     const data = {
@@ -2970,67 +3934,170 @@ var EnrichmentBot = class {
       allPhones: [],
       allEmails: []
     };
-    const visited = /* @__PURE__ */ new Set();
-    const queue = [url];
-    let pagesCrawled = 0;
-    const permissiveAgent = new https2.Agent({ rejectUnauthorized: false });
     let baseUrl;
     try {
       baseUrl = new URL(url);
     } catch {
       return data;
     }
-    while (queue.length > 0 && pagesCrawled < this.MAX_PAGES) {
-      const currentUrl = queue.shift();
-      if (visited.has(currentUrl)) continue;
-      visited.add(currentUrl);
-      pagesCrawled++;
+    try {
+      const scraplingResult = await ScraplingService.crawl(url);
+      if (scraplingResult.success && scraplingResult.data) {
+        const scData = scraplingResult.data;
+        if (scData.isParked) {
+          logger.warn("ENRICHMENT", `Scrapling detected parked/broker domain: ${url}`);
+          return data;
+        }
+        if (scData.phones?.length) {
+          data.allPhones = scData.phones;
+          data.phone = scData.phones[0];
+          data.evidence.push({
+            field: "phone",
+            value: data.phone,
+            url: scData.finalUrl || url,
+            method: "SCRAPLING_STEALTH_CRAWL",
+            confidence: "HIGH"
+          });
+        }
+        if (scData.emails?.length) {
+          data.allEmails = scData.emails;
+          data.email = scData.emails[0];
+          data.evidence.push({
+            field: "email",
+            value: data.email,
+            url: scData.finalUrl || url,
+            method: "SCRAPLING_STEALTH_CRAWL",
+            confidence: "HIGH"
+          });
+        }
+        if (scData.whatsapp) {
+          data.whatsapp = scData.whatsapp;
+          data.evidence.push({
+            field: "whatsapp",
+            value: data.whatsapp,
+            url: scData.finalUrl || url,
+            method: "SCRAPLING_STEALTH_CRAWL",
+            confidence: "HIGH"
+          });
+        }
+        if (scData.socialLinks && Object.keys(scData.socialLinks).length > 0) {
+          data.socialLinks = { ...scData.socialLinks };
+          Object.entries(scData.socialLinks).forEach(([platform, pUrl]) => {
+            data.evidence.push({
+              field: platform,
+              value: pUrl,
+              url: scData.finalUrl || url,
+              method: "SCRAPLING_STEALTH_CRAWL",
+              confidence: "HIGH"
+            });
+          });
+        }
+        if (scData.legal?.siret) {
+          data.siretOrVat = scData.legal.siret;
+          data.evidence.push({
+            field: "siret",
+            value: scData.legal.siret,
+            url: scData.finalUrl || url,
+            method: "SCRAPLING_STEALTH_CRAWL",
+            confidence: "HIGH"
+          });
+        }
+        if (scData.legal?.manager) {
+          data.managerName = scData.legal.manager;
+          data.evidence.push({
+            field: "manager",
+            value: scData.legal.manager,
+            url: scData.finalUrl || url,
+            method: "SCRAPLING_STEALTH_CRAWL",
+            confidence: "HIGH"
+          });
+        }
+        if (scData.title) {
+          data.tagline = scData.title;
+        }
+        if (data.phone && (data.email || data.siretOrVat || data.managerName)) {
+          return data;
+        }
+      }
+    } catch (scErr) {
+      logger.warn("SCRAPLING", `Scrapling non-fatal fallback: ${scErr.message}`);
+    }
+    const permissiveAgent = new https3.Agent({
+      rejectUnauthorized: false,
+      checkServerIdentity: () => void 0
+    });
+    const visited = /* @__PURE__ */ new Set();
+    const fetchPage = async (pageUrl) => {
       try {
-        const response = await axios4.get(currentUrl, {
+        const response = await axios5.get(pageUrl, {
           headers: {
             "User-Agent": this.USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8,de;q=0.7",
+            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache"
           },
           httpsAgent: permissiveAgent,
-          timeout: 1e4,
-          maxRedirects: 4,
+          timeout: 3500,
+          // Fast failover to keep speed blazing
+          maxRedirects: 3,
           validateStatus: (status) => status >= 200 && status < 400
         });
-        if (typeof response.data !== "string") continue;
-        const $ = cheerio3.load(response.data);
-        this.extractInfo($, currentUrl, data);
-        if (pagesCrawled === 1) {
-          const subpageCandidates = /* @__PURE__ */ new Set();
-          $("a").each((_, el) => {
-            const href = $(el).attr("href");
-            const linkText = $(el).text();
-            if (href && this.isLikelyContactOrInfoPage(href, linkText)) {
-              try {
-                const absoluteUrl = new URL(href, currentUrl).href;
-                const parsed = new URL(absoluteUrl);
-                if (parsed.hostname === baseUrl.hostname || parsed.hostname.endsWith("." + baseUrl.hostname.replace(/^www\./, ""))) {
-                  if (!parsed.hash && !/\.(pdf|jpg|jpeg|png|gif|zip|doc)$/i.test(parsed.pathname)) {
-                    subpageCandidates.add(parsed.origin + parsed.pathname);
-                  }
-                }
-              } catch {
+        if (typeof response.data === "string") {
+          return { url: pageUrl, html: response.data };
+        }
+      } catch {
+      }
+      return null;
+    };
+    try {
+      visited.add(url);
+      const homeResult = await fetchPage(url);
+      if (!homeResult) return data;
+      if (IdentityService.isParkedOrBrokerDomain(homeResult.html, url)) {
+        logger.warn("ENRICHMENT", `Parked or broker domain skipped: ${url}`);
+        return data;
+      }
+      const $home = cheerio4.load(homeResult.html);
+      this.extractInfo($home, url, data);
+      let contactCandidate = null;
+      let legalCandidate = null;
+      $home("a").each((_, el) => {
+        const href = $home(el).attr("href");
+        const linkText = $home(el).text();
+        if (href && (contactCandidate === null || legalCandidate === null)) {
+          try {
+            const absoluteUrl = new URL(href, url).href;
+            const parsed = new URL(absoluteUrl);
+            if ((parsed.hostname === baseUrl.hostname || parsed.hostname.endsWith("." + baseUrl.hostname.replace(/^www\./, ""))) && !parsed.hash && !/\.(pdf|jpg|jpeg|png|gif|zip|doc)$/i.test(parsed.pathname)) {
+              const cleanPath = (parsed.origin + parsed.pathname).toLowerCase();
+              const lower = (href + " " + linkText).toLowerCase();
+              if (!contactCandidate && (lower.includes("contact") || lower.includes("nous-contacter") || lower.includes("coordonnees"))) {
+                contactCandidate = cleanPath;
+              }
+              if (!legalCandidate && (lower.includes("mention") || lower.includes("legal") || lower.includes("impressum") || lower.includes("cgv") || lower.includes("propos"))) {
+                legalCandidate = cleanPath;
               }
             }
-          });
-          const prioritized = Array.from(subpageCandidates).slice(0, 5);
-          queue.push(...prioritized);
+          } catch {
+          }
         }
-      } catch (err) {
-        await logger.warn("CRAWLER", `Notice while crawling ${currentUrl}: ${err.message}`, { url }, "WEBSITE_SCRAPER");
+      });
+      const candidates = [contactCandidate, legalCandidate];
+      const subpagesToFetch = candidates.filter((u) => typeof u === "string" && !visited.has(u));
+      subpagesToFetch.forEach((u) => visited.add(u));
+      if (subpagesToFetch.length > 0) {
+        const results = await Promise.allSettled(subpagesToFetch.map((u) => fetchPage(u)));
+        for (const res of results) {
+          if (res.status === "fulfilled" && res.value) {
+            const $sub = cheerio4.load(res.value.html);
+            this.extractInfo($sub, res.value.url, data);
+          }
+        }
       }
+    } catch (err) {
+      await logger.warn("CRAWLER", `Notice while enriching ${url}: ${err.message}`, { url }, "WEBSITE_SCRAPER");
     }
     return data;
-  }
-  static isLikelyContactOrInfoPage(href, text2) {
-    const lower = (href + " " + text2).toLowerCase();
-    return lower.includes("contact") || lower.includes("contacter") || lower.includes("about") || lower.includes("propos") || lower.includes("legal") || lower.includes("imprint") || lower.includes("impressum") || lower.includes("mention") || lower.includes("kontakt") || lower.includes("nous-trouver") || lower.includes("qui-sommes-nous") || lower.includes("team") || lower.includes("equipe") || lower.includes("services") || lower.includes("info") || lower.includes("coordonnees");
   }
   static extractInfo($, url, data) {
     const bodyText = $("body").text();
@@ -3051,8 +4118,7 @@ var EnrichmentBot = class {
       } catch {
       }
     });
-    const telLinks = $('a[href^="tel:"]');
-    telLinks.each((_, el) => {
+    $('a[href^="tel:"]').each((_, el) => {
       const rawTel = $(el).attr("href")?.replace("tel:", "").trim();
       if (rawTel) {
         const clean = this.cleanPhoneNumber(rawTel);
@@ -3065,25 +4131,21 @@ var EnrichmentBot = class {
         }
       }
     });
-    const textPhoneRegex = /(?:(?:\+|00)(?:[1-9]\d{0,2})[\s.-]*)?(?:\(?\d{1,4}\)?[\s.-]*)?\d{2,4}[\s.-]*\d{2,4}[\s.-]*\d{2,4}/g;
-    const phoneCandidates = bodyText.match(textPhoneRegex);
+    const frenchPhoneRegex = /(?:(?:\+|00)33[\s.-]?|0)[1-9](?:[\s.-]?\d{2}){4}/g;
+    const phoneCandidates = bodyText.match(frenchPhoneRegex);
     if (phoneCandidates) {
       for (const raw of phoneCandidates) {
         const clean = this.cleanPhoneNumber(raw);
         if (clean && this.isValidPhoneNumber(clean)) {
-          const digits = clean.replace(/\D/g, "");
-          if (digits.length >= 8 && digits.length <= 13) {
-            if (!data.phone) data.phone = clean;
-            if (!data.allPhones?.includes(clean) && (data.allPhones?.length || 0) < 3) {
-              data.allPhones?.push(clean);
-              data.evidence.push({ field: "phone", value: clean, url, method: "regex text", confidence: "MEDIUM" });
-            }
+          if (!data.phone) data.phone = clean;
+          if (!data.allPhones?.includes(clean) && (data.allPhones?.length || 0) < 3) {
+            data.allPhones?.push(clean);
+            data.evidence.push({ field: "phone", value: clean, url, method: "regex text", confidence: "MEDIUM" });
           }
         }
       }
     }
-    const mailtoLinks = $('a[href^="mailto:"]');
-    mailtoLinks.each((_, el) => {
+    $('a[href^="mailto:"]').each((_, el) => {
       const email = $(el).attr("href")?.replace("mailto:", "").split("?")[0].trim().toLowerCase();
       if (email && this.isValidEmail(email)) {
         if (!data.email) data.email = email;
@@ -3093,7 +4155,7 @@ var EnrichmentBot = class {
         }
       }
     });
-    let normalizedBodyText = bodyText.replace(/\s*\[at\]\s*/gi, "@").replace(/\s*\(at\)\s*/gi, "@").replace(/\s*\[dot\]\s*/gi, ".").replace(/\s*\(dot\)\s*/gi, ".");
+    const normalizedBodyText = bodyText.replace(/\s*\[at\]\s*/gi, "@").replace(/\s*\(at\)\s*/gi, "@").replace(/\s*\[dot\]\s*/gi, ".").replace(/\s*\(dot\)\s*/gi, ".");
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const foundEmails = normalizedBodyText.match(emailRegex);
     if (foundEmails) {
@@ -3132,75 +4194,52 @@ var EnrichmentBot = class {
       if (!href) return;
       try {
         const lowerHref = href.toLowerCase();
-        if (lowerHref.includes("facebook.com/") && !lowerHref.includes("/sharer") && !lowerHref.includes("/dialog") && !lowerHref.includes("/tr?")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.facebook) {
+        if (lowerHref.includes("facebook.com") && !data.socialLinks.facebook) {
+          const cleanUrl = SocialEnrichmentService.normalizeFacebookUrl(href);
+          if (cleanUrl) {
             data.socialLinks.facebook = cleanUrl;
             data.evidence.push({ field: "facebook", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
           }
         }
-        if (lowerHref.includes("instagram.com/") && !lowerHref.includes("/p/") && !lowerHref.includes("/explore/")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.instagram) {
+        if (lowerHref.includes("instagram.com") && !data.socialLinks.instagram) {
+          const cleanUrl = SocialEnrichmentService.normalizeInstagramUrl(href);
+          if (cleanUrl) {
             data.socialLinks.instagram = cleanUrl;
             data.evidence.push({ field: "instagram", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
           }
         }
-        if (lowerHref.includes("linkedin.com/company/") || lowerHref.includes("linkedin.com/in/")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.linkedin) {
+        if (lowerHref.includes("linkedin.com") && !data.socialLinks.linkedin) {
+          const cleanUrl = SocialEnrichmentService.normalizeLinkedInUrl(href);
+          if (cleanUrl) {
             data.socialLinks.linkedin = cleanUrl;
             data.evidence.push({ field: "linkedin", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
           }
         }
-        if ((lowerHref.includes("twitter.com/") || lowerHref.includes("x.com/")) && !lowerHref.includes("/intent") && !lowerHref.includes("/share")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.twitter) {
+        if ((lowerHref.includes("twitter.com") || lowerHref.includes("x.com")) && !data.socialLinks.twitter) {
+          const cleanUrl = SocialEnrichmentService.normalizeTwitterUrl(href);
+          if (cleanUrl) {
             data.socialLinks.twitter = cleanUrl;
             data.evidence.push({ field: "twitter", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
-          }
-        }
-        if (lowerHref.includes("tiktok.com/@")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.tiktok) {
-            data.socialLinks.tiktok = cleanUrl;
-            data.evidence.push({ field: "tiktok", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
-          }
-        }
-        if (lowerHref.includes("youtube.com/@") || lowerHref.includes("youtube.com/channel/") || lowerHref.includes("youtube.com/c/")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.youtube) {
-            data.socialLinks.youtube = cleanUrl;
-            data.evidence.push({ field: "youtube", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
-          }
-        }
-        if (lowerHref.includes("pinterest.com/") || lowerHref.includes("pinterest.fr/")) {
-          const cleanUrl = this.cleanSocialUrl(href);
-          if (cleanUrl && !data.socialLinks.pinterest) {
-            data.socialLinks.pinterest = cleanUrl;
-            data.evidence.push({ field: "pinterest", value: cleanUrl, url, method: "page link", confidence: "HIGH" });
           }
         }
       } catch {
       }
     });
-    if (url.includes("mention") || url.includes("legal") || url.includes("impressum")) {
-      if (!data.siretOrVat) {
-        const siretMatch = bodyText.match(/(?:siret|siren|rcs|tva|ide|vat)[\s:.-]*([0-9\s]{9,18}[0-9A-Z])/i);
-        if (siretMatch && siretMatch[1]) {
-          const cleanSiret = siretMatch[1].trim();
-          data.siretOrVat = cleanSiret;
-          data.evidence.push({ field: "legal_id", value: cleanSiret, url, method: "legal notice text", confidence: "HIGH" });
-        }
+    if (!data.siretOrVat) {
+      const siretMatch = bodyText.match(/(?:siret|siren|rcs|n°\s*siret)[\s:.-]*([0-9]{3}[\s\.]?[0-9]{3}[\s\.]?[0-9]{3}(?:[\s\.]?[0-9]{5})?)/i);
+      if (siretMatch && siretMatch[1]) {
+        const cleanSiret = siretMatch[1].replace(/\s+/g, " ").trim();
+        data.siretOrVat = cleanSiret;
+        data.evidence.push({ field: "legal_id", value: cleanSiret, url, method: "legal notice text", confidence: "HIGH" });
       }
-      if (!data.managerName) {
-        const managerMatch = bodyText.match(/(?:dirigeant|gérant|directeur|responsable de la publication|geschäftsführer|managing director|ceo|fondateur)[\s:.-]*([A-Z][a-zÀ-ÿ]+(?:\s+[A-Z][a-zÀ-ÿ]+){1,3})/i);
-        if (managerMatch && managerMatch[1]) {
-          const manager = managerMatch[1].trim();
-          if (manager.length > 3 && manager.length < 40) {
-            data.managerName = manager;
-            data.evidence.push({ field: "manager", value: manager, url, method: "legal notice text", confidence: "HIGH" });
-          }
+    }
+    if (!data.managerName) {
+      const managerMatch = bodyText.match(/(?:dirigeant|gérant|directeur|responsable\s+de\s+la\s+publication|président)[\s:.-]*([A-ZÀ-ÖØ-ß][a-zà-öø-ÿ]+(?:\s+[A-ZÀ-ÖØ-ß][a-zà-öø-ÿ]+){1,3})/i);
+      if (managerMatch && managerMatch[1]) {
+        const manager = managerMatch[1].trim();
+        if (manager.length > 3 && manager.length < 40) {
+          data.managerName = manager;
+          data.evidence.push({ field: "manager", value: manager, url, method: "legal notice text", confidence: "HIGH" });
         }
       }
     }
@@ -3260,37 +4299,6 @@ var EnrichmentBot = class {
         data.evidence.push({ field: "opening_hours", value: hours, url, method: "JSON-LD openingHours", confidence: "HIGH" });
       }
     }
-    if (dataObj.legalName && !data.legalName) {
-      data.legalName = String(dataObj.legalName).trim();
-      data.evidence.push({ field: "legal_name", value: data.legalName, url, method: "JSON-LD legalName", confidence: "HIGH" });
-    }
-    if (dataObj.sameAs) {
-      const sameAsList = Array.isArray(dataObj.sameAs) ? dataObj.sameAs : [dataObj.sameAs];
-      for (const item of sameAsList) {
-        if (typeof item === "string") {
-          const lower = item.toLowerCase();
-          if (lower.includes("facebook.com") && !data.socialLinks.facebook) {
-            data.socialLinks.facebook = item;
-            data.evidence.push({ field: "facebook", value: item, url, method: "Schema sameAs", confidence: "HIGH" });
-          } else if (lower.includes("instagram.com") && !data.socialLinks.instagram) {
-            data.socialLinks.instagram = item;
-            data.evidence.push({ field: "instagram", value: item, url, method: "Schema sameAs", confidence: "HIGH" });
-          } else if (lower.includes("linkedin.com") && !data.socialLinks.linkedin) {
-            data.socialLinks.linkedin = item;
-            data.evidence.push({ field: "linkedin", value: item, url, method: "Schema sameAs", confidence: "HIGH" });
-          } else if ((lower.includes("twitter.com") || lower.includes("x.com")) && !data.socialLinks.twitter) {
-            data.socialLinks.twitter = item;
-            data.evidence.push({ field: "twitter", value: item, url, method: "Schema sameAs", confidence: "HIGH" });
-          } else if (lower.includes("tiktok.com") && !data.socialLinks.tiktok) {
-            data.socialLinks.tiktok = item;
-            data.evidence.push({ field: "tiktok", value: item, url, method: "Schema sameAs", confidence: "HIGH" });
-          } else if (lower.includes("youtube.com") && !data.socialLinks.youtube) {
-            data.socialLinks.youtube = item;
-            data.evidence.push({ field: "youtube", value: item, url, method: "Schema sameAs", confidence: "HIGH" });
-          }
-        }
-      }
-    }
   }
   static cleanPhoneNumber(phone) {
     return phone.trim().replace(/\s+/g, " ");
@@ -3323,8 +4331,8 @@ var EnrichmentBot = class {
 };
 
 // src/services/search/providers.ts
-import axios5 from "axios";
-import * as cheerio4 from "cheerio";
+import axios6 from "axios";
+import * as cheerio5 from "cheerio";
 import { GoogleGenAI } from "@google/genai";
 var DuckDuckGoSearchProvider = class {
   getName() {
@@ -3335,7 +4343,7 @@ var DuckDuckGoSearchProvider = class {
   }
   async search(query, limit = 3) {
     try {
-      const response = await axios5.post(
+      const response = await axios6.post(
         "https://lite.duckduckgo.com/lite/",
         `q=${encodeURIComponent(query)}`,
         {
@@ -3355,7 +4363,7 @@ var DuckDuckGoSearchProvider = class {
         if (response.status === 202) console.warn("[DuckDuckGoSearchProvider] Received 202 Accepted - results might be delayed or throttled.");
         return [];
       }
-      const $ = cheerio4.load(response.data);
+      const $ = cheerio5.load(response.data);
       const results = [];
       const EXCLUDED_DOMAINS = [
         "duckduckgo.com",
@@ -3453,60 +4461,6 @@ var GeminiSearchProvider = class {
     }
   }
 };
-var LocalWebsiteDiscoveryProvider = class {
-  getName() {
-    return "LocalWebsiteDiscovery";
-  }
-  isVerified() {
-    return true;
-  }
-  async search(query, limit = 3) {
-    const parts = query.replace(" official website", "").trim().split(" ");
-    if (parts.length === 0) return [];
-    const city = parts[parts.length - 1];
-    const companyParts = parts.slice(0, -1).join(" ") || parts[0];
-    const cleanName = companyParts.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-    if (!cleanName || cleanName.length < 3) return [];
-    const tlds = [".ch", ".com", ".fr", ".de", ".co.uk", ".net", ".org"];
-    const candidates = [];
-    const domainRoots = [cleanName];
-    const hyphenated = companyParts.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim().split(/\s+/).join("-");
-    if (hyphenated !== cleanName && hyphenated.length > 4) {
-      domainRoots.push(hyphenated);
-    }
-    for (const root of domainRoots) {
-      if (candidates.length >= limit) break;
-      for (const tld of tlds) {
-        if (candidates.length >= limit) break;
-        const testUrl = `https://www.${root}${tld}`;
-        try {
-          const res = await axios5.get(testUrl, {
-            timeout: 5e3,
-            headers: {
-              "User-Agent": "LeadForge-Identity-Verifier/2.0",
-              "Accept": "text/html,application/xhtml+xml"
-            },
-            maxRedirects: 4,
-            validateStatus: (status) => status >= 200 && status < 400
-          });
-          if (res.status >= 200 && res.status < 400 && typeof res.data === "string") {
-            const verification = IdentityService.verifyIdentityOnPage(res.data, companyParts, void 0, city);
-            if (verification.match || root === cleanName) {
-              candidates.push({
-                title: `${companyParts} Official Website`,
-                url: testUrl,
-                snippet: `Verified domain match: ${verification.evidence}`,
-                source: "LOCAL_DOMAIN_PROBE"
-              });
-            }
-          }
-        } catch {
-        }
-      }
-    }
-    return candidates;
-  }
-};
 var GoogleSearchProvider = class {
   constructor() {
     this.apiKey = process.env.GOOGLE_SEARCH_API_KEY || process.env.GOOGLE_CUSTOM_SEARCH_API_KEY;
@@ -3521,7 +4475,7 @@ var GoogleSearchProvider = class {
   async search(query, limit = 3) {
     if (!this.isVerified()) return [];
     try {
-      const response = await axios5.get("https://www.googleapis.com/customsearch/v1", {
+      const response = await axios6.get("https://www.googleapis.com/customsearch/v1", {
         params: {
           key: this.apiKey,
           cx: this.cx,
@@ -3556,7 +4510,7 @@ var FirecrawlProvider = class {
   async search(query, limit = 3) {
     if (!this.isVerified()) return [];
     try {
-      const response = await axios5.post(
+      const response = await axios6.post(
         "https://api.firecrawl.dev/v1/search",
         { query, limit },
         {
@@ -3593,7 +4547,7 @@ var BingSearchProvider = class {
   async search(query, limit = 3) {
     if (!this.isVerified()) return [];
     try {
-      const response = await axios5.get("https://api.bing.microsoft.com/v7.0/search", {
+      const response = await axios6.get("https://api.bing.microsoft.com/v7.0/search", {
         params: { q: query, count: limit },
         headers: { "Ocp-Apim-Subscription-Key": this.apiKey },
         timeout: 8e3
@@ -3618,7 +4572,6 @@ var SearchProviderFactory = class {
     this.providers = [
       new GeminiSearchProvider(),
       new DuckDuckGoSearchProvider(),
-      new LocalWebsiteDiscoveryProvider(),
       new GoogleSearchProvider(),
       new FirecrawlProvider(),
       new BingSearchProvider()
@@ -3664,10 +4617,48 @@ var OpportunityService = class {
       "restaurant": ["BOOKING", "WHATSAPP", "LOCAL_SEO", "WEBSITE"],
       "dentist": ["BOOKING", "WHATSAPP", "LOCAL_SEO", "WEBSITE"],
       "car_repair": ["WHATSAPP", "LOCAL_SEO", "WEBSITE"],
+      "car mechanic": ["WHATSAPP", "LOCAL_SEO", "WEBSITE"],
       "plumber": ["WHATSAPP", "LOCAL_SEO", "WEBSITE"],
+      "electrician": ["WHATSAPP", "LOCAL_SEO", "WEBSITE"],
       "architect": ["CONTENT", "WEBSITE", "SEO"],
-      "phone_repair": ["WHATSAPP", "LOCAL_SEO", "WEBSITE", "BOOKING"]
+      "phone_repair": ["WHATSAPP", "LOCAL_SEO", "WEBSITE", "BOOKING"],
+      "hairdresser": ["BOOKING", "WHATSAPP", "LOCAL_SEO", "WEBSITE"],
+      "barber": ["BOOKING", "WHATSAPP", "LOCAL_SEO", "WEBSITE"],
+      "lawyer": ["CONTENT", "WEBSITE", "LOCAL_SEO", "SEO"],
+      "real estate agency": ["WEBSITE", "SEO", "WHATSAPP", "LOCAL_SEO"],
+      "gym": ["BOOKING", "WHATSAPP", "WEBSITE", "LOCAL_SEO"]
     };
+  }
+  static {
+    this.HIGH_VALUE_SECTORS = [
+      "dentist",
+      "dental",
+      "doctor",
+      "clinic",
+      "physiotherapist",
+      "osteopath",
+      "veterinary",
+      "plumber",
+      "electrician",
+      "heating",
+      "hvac",
+      "roofing",
+      "carpenter",
+      "car_repair",
+      "car mechanic",
+      "locksmith",
+      "lawyer",
+      "notary",
+      "architect",
+      "accountant",
+      "estate_agent",
+      "real estate agency",
+      "restaurant",
+      "hotel",
+      "spa",
+      "beauty",
+      "hairdresser"
+    ];
   }
   static async analyzeLead(leadId) {
     const lead = await db.query.leads.findFirst({
@@ -3685,62 +4676,121 @@ var OpportunityService = class {
     if (!lead) throw new Error("Lead not found");
     const audit = lead.audits[0];
     const newOpportunities = [];
-    if (lead.websiteStatus === "not_detected") {
+    const categoryLower = (lead.category || "").toLowerCase();
+    const hasOfficialWebsite = Boolean(
+      lead.website && lead.websiteStatus === "verified" && !lead.website.includes("facebook.com") && !lead.website.includes("instagram.com") && !lead.website.includes("linkedin.com")
+    );
+    if (!hasOfficialWebsite) {
+      if (lead.websiteStatus === "social_profile" || lead.website?.includes("facebook.com") || lead.website?.includes("instagram.com")) {
+        newOpportunities.push({
+          leadId,
+          type: "WEBSITE",
+          title: "Cr\xE9ation de site vitrine professionnel (Remplacement r\xE9seaux sociaux)",
+          description: "L\u2019entreprise n\u2019a pas de domaine web ind\xE9pendant et repose uniquement sur les r\xE9seaux sociaux. Elle perd les recherches directes Google & Maps et manque de cr\xE9dibilit\xE9.",
+          severity: "HIGH",
+          evidence: "Pr\xE9sence num\xE9rique limit\xE9e \xE0 une page de r\xE9seau social sans domaine propre.",
+          confidence: "HIGH",
+          recommendedService: "Website Development",
+          score: 45
+        });
+      } else {
+        newOpportunities.push({
+          leadId,
+          type: "WEBSITE",
+          title: "D\xE9veloppement d\u2019un site vitrine officiel",
+          description: "Aucun site internet d\xE9tect\xE9 pour cette entreprise locale. C\u2019est le profil \xE0 plus haute valeur : le g\xE9rant est actif localement mais invisible sur Google.",
+          severity: "HIGH",
+          evidence: "Absence totale de site internet index\xE9 pour cet \xE9tablissement actif.",
+          confidence: "HIGH",
+          recommendedService: "Website Development",
+          score: 45
+        });
+      }
+    }
+    const isHighTicket = this.HIGH_VALUE_SECTORS.some((s) => categoryLower.includes(s));
+    if (isHighTicket) {
       newOpportunities.push({
         leadId,
-        type: "WEBSITE",
-        title: "Website development opportunity",
-        description: "The business does not appear to have an official website.",
+        type: "CONTENT",
+        title: "Secteur \xE0 Fort Panier Moyen & Budget \xC9lev\xE9",
+        description: "Activit\xE9 \xE0 forte valeur unitaire par client (artisanat, sant\xE9, juridique, conseil). Un seul client additionnel acquis via le web rentabilise int\xE9gralement le service.",
         severity: "HIGH",
-        evidence: "Discovery process failed to find a valid website candidate.",
+        evidence: `Activit\xE9 identifi\xE9e : ${lead.category || "Profession lib\xE9rale / Artisan"}`,
         confidence: "HIGH",
-        recommendedService: "Website Development",
-        score: 40
+        recommendedService: "Pack Croissance & Visibilit\xE9 B2B",
+        score: 25
+      });
+    }
+    if (lead.phone && lead.phone.trim().length >= 6) {
+      if (!hasOfficialWebsite) {
+        newOpportunities.push({
+          leadId,
+          type: "WHATSAPP",
+          title: "Lead Joignable Directement & T\xE9l\xE9phone Garanti",
+          description: "Num\xE9ro de contact direct v\xE9rifi\xE9. Prospect imm\xE9diatement actionnable par appel t\xE9l\xE9phonique ou message commercial pour un closing rapide.",
+          severity: "MEDIUM",
+          evidence: `Num\xE9ro direct v\xE9rifi\xE9 : ${lead.phone}`,
+          confidence: "HIGH",
+          recommendedService: "Messaging Automation",
+          score: 15
+        });
+      }
+    }
+    if (lead.googleRating && lead.googleRating >= 4 || lead.googleReviews && lead.googleReviews >= 5) {
+      newOpportunities.push({
+        leadId,
+        type: "LOCAL_SEO",
+        title: "Notori\xE9t\xE9 \xC9tablie & Forte Demande Locale",
+        description: `Excellente r\xE9putation (${lead.googleRating ? `${lead.googleRating}\u2605` : ""} avec avis clients). Cette entreprise a des flux de clients constants et le budget pour moderniser sa pr\xE9sence digitale.`,
+        severity: "MEDIUM",
+        evidence: `${lead.googleRating || "Bonne note"} sur Google Maps avec avis clients actifs.`,
+        confidence: "HIGH",
+        recommendedService: "Local SEO Package",
+        score: 20
       });
     }
     if (audit && audit.status === "completed") {
-      const findings = audit.findings;
+      const findings = audit.findings || [];
       if (audit.seoScore !== null && audit.seoScore < 70) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
           type: "SEO",
-          title: "SEO Optimization",
-          description: "Technical SEO issues are affecting search engine visibility.",
+          title: "Optimisation SEO & R\xE9f\xE9rencement Google",
+          description: "Des lacunes techniques freinent le positionnement de l\u2019entreprise face \xE0 ses concurrents locaux sur les requ\xEAtes strat\xE9giques.",
           severity: "MEDIUM",
-          evidence: findings.filter((f) => f.category === "SEO").map((f) => f.title).join(", "),
+          evidence: findings.filter((f) => f.category === "SEO").map((f) => f.title).join(", ") || "Score SEO perfectible",
           confidence: "HIGH",
           recommendedService: "SEO Audit & Implementation",
           score: 20
         });
       }
-      const category = lead.category?.toLowerCase() || "";
-      const supportsBooking = this.CATEGORY_RULES[category]?.includes("BOOKING") || findings.some((f) => f.category === "Conversion" && f.title.includes("Booking"));
-      if (supportsBooking && findings.some((f) => f.title === "Booking System not detected")) {
+      const supportsBooking = this.CATEGORY_RULES[categoryLower]?.includes("BOOKING") || findings.some((f) => f.category === "Conversion" && f.title.includes("Booking"));
+      if (supportsBooking && findings.some((f) => f.title?.includes("Booking") || f.title?.includes("R\xE9servation"))) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
           type: "BOOKING",
-          title: "Online Booking System",
-          description: "Improve customer experience by allowing direct online appointments.",
+          title: "Prise de Rendez-Vous en Ligne",
+          description: "Permettre aux clients de r\xE9server directement en ligne 24/7 pour augmenter les conversions et d\xE9sengorger le standard t\xE9l\xE9phonique.",
           severity: "HIGH",
-          evidence: "No booking link or form detected on audited pages.",
-          confidence: "MEDIUM",
+          evidence: "Aucun syst\xE8me de prise de rendez-vous d\xE9tect\xE9 sur les pages du site.",
+          confidence: "HIGH",
           recommendedService: "Appointment Booking Integration",
           score: 25
         });
       }
-      const supportsWhatsApp = this.CATEGORY_RULES[category]?.includes("WHATSAPP");
-      if (supportsWhatsApp && findings.some((f) => f.title === "WhatsApp not detected")) {
+      const supportsWhatsApp = this.CATEGORY_RULES[categoryLower]?.includes("WHATSAPP");
+      if (supportsWhatsApp && findings.some((f) => f.title?.includes("WhatsApp"))) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
           type: "WHATSAPP",
-          title: "WhatsApp Contact CTA",
-          description: "Increase conversions by adding a direct WhatsApp contact button.",
+          title: "Bouton d\u2019Appel & Contact Direct WhatsApp 1-Clic",
+          description: "Capter imm\xE9diatement les visiteurs sur smartphone via un bouton WhatsApp flottant pour convertir les demandes de devis.",
           severity: "MEDIUM",
-          evidence: "No WhatsApp integration found on the homepage.",
-          confidence: "MEDIUM",
+          evidence: "Absence de bouton direct WhatsApp sur le site.",
+          confidence: "HIGH",
           recommendedService: "Messaging Automation",
           score: 15
         });
@@ -3750,10 +4800,10 @@ var OpportunityService = class {
           leadId,
           auditId: audit.id,
           type: "LOCAL_SEO",
-          title: "Local SEO & Schema",
-          description: "Missing structured data prevents the business from ranking in map packs.",
+          title: "R\xE9f\xE9rencement Local Google Maps & Donn\xE9es Structur\xE9es",
+          description: "Donn\xE9es d\u2019entreprise locales manquantes pour appara\xEEtre dans le pack local Google Maps.",
           severity: "HIGH",
-          evidence: findings.filter((f) => f.category === "Local SEO").map((f) => f.title).join(", "),
+          evidence: findings.filter((f) => f.category === "Local SEO").map((f) => f.title).join(", ") || "Score Local perfectible",
           confidence: "HIGH",
           recommendedService: "Local SEO Package",
           score: 20
@@ -3764,40 +4814,40 @@ var OpportunityService = class {
           leadId,
           auditId: audit.id,
           type: "PERFORMANCE",
-          title: "Page Speed Improvement",
-          description: "Slow load times are likely increasing bounce rates.",
-          severity: "MEDIUM",
-          evidence: `Measured TTFB: ${audit.metrics.ttfb}ms`,
+          title: "Optimisation Vitesse Mobile",
+          description: "Temps de chargement lent faisant fuir les prospects sur smartphone.",
+          severity: "HIGH",
+          evidence: `Score de vitesse mobile : ${audit.performanceScore}/100`,
           confidence: "HIGH",
-          recommendedService: "Performance Optimization",
-          score: 15
+          recommendedService: "Page Speed Optimization",
+          score: 20
         });
       }
-      const hasSecurityIssue = findings.some((f) => f.category === "Security" || f.title.includes("SSL") || f.title.includes("Certificate"));
+      const hasSecurityIssue = findings.some((f) => f.category === "Security" || f.title?.includes("SSL") || f.title?.includes("Certificate"));
       if (hasSecurityIssue) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
           type: "SECURITY",
-          title: "SSL / Security Certificate Fix",
-          description: "The website has an invalid, mismatched, or expired SSL certificate triggering browser warnings.",
+          title: "S\xE9curisation HTTPS & Certificat SSL",
+          description: "Le site pr\xE9sente un certificat SSL invalide ou manquant d\xE9clenchant des alertes de s\xE9curit\xE9 dans les navigateurs.",
           severity: "CRITICAL",
-          evidence: findings.filter((f) => f.category === "Security" || f.title.includes("SSL") || f.title.includes("Certificate")).map((f) => f.title).join(", "),
+          evidence: "Alerte de certificat SSL / HTTPS non s\xE9curis\xE9 d\xE9tect\xE9e.",
           confidence: "HIGH",
           recommendedService: "SSL Certificate & Domain Setup",
           score: 35
         });
       }
-      const hasHostingIssue = findings.some((f) => f.title.includes("Timeout") || f.title.includes("Restricted") || f.title.includes("Server Error") || f.title.includes("Failure"));
+      const hasHostingIssue = findings.some((f) => f.title?.includes("Timeout") || f.title?.includes("Restricted") || f.title?.includes("Server Error") || f.title?.includes("Failure"));
       if (hasHostingIssue) {
         newOpportunities.push({
           leadId,
           auditId: audit.id,
           type: "TECHNICAL",
-          title: "Hosting & Server Reliability Fix",
-          description: "The website experiences severe server latency, timeouts, or access restrictions.",
+          title: "H\xE9bergement Cloud & Fiabilit\xE9 Serveur",
+          description: "Le site subit des temps d\u2019attente serveur \xE9lev\xE9s, des erreurs de connexion ou des coupures intermittentes.",
           severity: "HIGH",
-          evidence: findings.filter((f) => f.title.includes("Timeout") || f.title.includes("Restricted") || f.title.includes("Server Error") || f.title.includes("Failure")).map((f) => f.title).join(", "),
+          evidence: findings.filter((f) => f.title?.includes("Timeout") || f.title?.includes("Restricted") || f.title?.includes("Server Error") || f.title?.includes("Failure")).map((f) => f.title).join(", ") || "Latence serveur",
           confidence: "HIGH",
           recommendedService: "Managed Cloud Hosting & Modernization",
           score: 30
@@ -3822,247 +4872,9 @@ var OpportunityService = class {
   }
 };
 
-// src/services/socialEnrichmentService.ts
-import axios6 from "axios";
-import * as cheerio5 from "cheerio";
-import https3 from "https";
-var SocialEnrichmentService = class {
-  static {
-    this.CRAWLER_USER_AGENT = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
-  }
-  static {
-    this.GOOGLEBOT_USER_AGENT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
-  }
-  /**
-   * Discovers and extracts real, verified information from social media profiles
-   * when a local business does NOT have an official website.
-   * Strictly extracts from actual public HTTP responses — ZERO fake/synthetic data.
-   */
-  static async enrichFromSocialMedia(companyName, city, country, existingRawTags) {
-    const result = {
-      socialLinks: {},
-      evidence: []
-    };
-    if (!companyName || companyName.trim().length < 2) return result;
-    if (existingRawTags) {
-      this.extractSocialFromTags(existingRawTags, result);
-    }
-    const candidateUrls = [];
-    if (result.socialLinks.facebook) candidateUrls.push({ url: result.socialLinks.facebook, platform: "facebook" });
-    if (result.socialLinks.instagram) candidateUrls.push({ url: result.socialLinks.instagram, platform: "instagram" });
-    if (result.socialLinks.linkedin) candidateUrls.push({ url: result.socialLinks.linkedin, platform: "linkedin" });
-    if (result.socialLinks.twitter) candidateUrls.push({ url: result.socialLinks.twitter, platform: "twitter" });
-    if (candidateUrls.length === 0) {
-      const slugs = this.generateSocialSlugs(companyName, city);
-      for (const slug of slugs.slice(0, 2)) {
-        candidateUrls.push({ url: `https://www.facebook.com/${slug}`, platform: "facebook" });
-        candidateUrls.push({ url: `https://www.instagram.com/${slug}/`, platform: "instagram" });
-      }
-    }
-    const permissiveAgent = new https3.Agent({ rejectUnauthorized: false });
-    for (const candidate of candidateUrls) {
-      try {
-        const userAgent = candidate.platform === "facebook" ? this.CRAWLER_USER_AGENT : this.GOOGLEBOT_USER_AGENT;
-        const res = await axios6.get(candidate.url, {
-          headers: {
-            "User-Agent": userAgent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8,de;q=0.7",
-            "Cache-Control": "no-cache"
-          },
-          httpsAgent: permissiveAgent,
-          timeout: 6e3,
-          maxRedirects: 3,
-          validateStatus: (status) => status >= 200 && status < 400
-        });
-        if (typeof res.data !== "string") continue;
-        const $ = cheerio5.load(res.data);
-        const ogTitle = $('meta[property="og:title"]').attr("content") || $("title").text() || "";
-        const ogDesc = $('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "";
-        const fullSnippet = `${ogTitle} ${ogDesc}`.trim();
-        const cleanCompanyName = companyName.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const cleanSnippet = fullSnippet.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const isMatch = cleanSnippet.includes(cleanCompanyName.slice(0, Math.min(cleanCompanyName.length, 6)));
-        if (!isMatch && !candidateUrls.some((c) => c.url === candidate.url)) {
-          continue;
-        }
-        if (!result.socialUrl) {
-          result.socialUrl = candidate.url;
-          result.platform = candidate.platform;
-        }
-        if (candidate.platform && !result.socialLinks[candidate.platform]) {
-          result.socialLinks[candidate.platform] = candidate.url;
-          result.evidence.push({
-            field: candidate.platform,
-            value: candidate.url,
-            url: candidate.url,
-            method: "Verified Social Presence",
-            confidence: "HIGH"
-          });
-        }
-        if (!result.phone) {
-          const phone = this.extractPhoneFromText(fullSnippet);
-          if (phone) {
-            result.phone = phone;
-            result.evidence.push({
-              field: "phone",
-              value: phone,
-              url: candidate.url,
-              method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
-              confidence: "HIGH"
-            });
-          }
-        }
-        if (!result.email) {
-          const email = this.extractEmailFromText(fullSnippet);
-          if (email) {
-            result.email = email;
-            result.evidence.push({
-              field: "email",
-              value: email,
-              url: candidate.url,
-              method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
-              confidence: "HIGH"
-            });
-          }
-        }
-        if (!result.address && city) {
-          const addr = this.extractAddressFromText(fullSnippet, city);
-          if (addr) {
-            result.address = addr;
-            result.evidence.push({
-              field: "address",
-              value: addr,
-              url: candidate.url,
-              method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
-              confidence: "HIGH"
-            });
-          }
-        }
-        if (!result.discoveredWebsite) {
-          const websiteCandidate = this.extractWebsiteFromBio(fullSnippet);
-          if (websiteCandidate) {
-            result.discoveredWebsite = websiteCandidate;
-            result.evidence.push({
-              field: "website",
-              value: websiteCandidate,
-              url: candidate.url,
-              method: `${candidate.platform?.toUpperCase()} Bio External Link`,
-              confidence: "HIGH"
-            });
-          }
-        }
-        if (ogDesc && !result.bio && ogDesc.length > 20) {
-          result.bio = ogDesc.slice(0, 300).trim();
-          result.evidence.push({
-            field: "social_bio",
-            value: result.bio,
-            url: candidate.url,
-            method: `${candidate.platform?.toUpperCase()} Profile Summary`,
-            confidence: "HIGH"
-          });
-        }
-      } catch (err) {
-        await logger.warn("SOCIAL_SCRAPER", `Notice inspecting ${candidate.url}: ${err.message}`, { companyName }, "SOCIAL_SCRAPER");
-      }
-    }
-    return result;
-  }
-  static extractSocialFromTags(tags, result) {
-    const fb = tags["contact:facebook"] || tags.facebook;
-    if (fb && typeof fb === "string" && fb.trim().length > 5) {
-      const cleanFb = fb.startsWith("http") ? fb.trim() : `https://www.facebook.com/${fb.trim().replace(/^@/, "")}`;
-      result.socialLinks.facebook = cleanFb;
-      result.evidence.push({ field: "facebook", value: cleanFb, url: cleanFb, method: "OpenStreetMap contact tag", confidence: "HIGH" });
-    }
-    const insta = tags["contact:instagram"] || tags.instagram;
-    if (insta && typeof insta === "string" && insta.trim().length > 3) {
-      const cleanInsta = insta.startsWith("http") ? insta.trim() : `https://www.instagram.com/${insta.trim().replace(/^@/, "")}/`;
-      result.socialLinks.instagram = cleanInsta;
-      result.evidence.push({ field: "instagram", value: cleanInsta, url: cleanInsta, method: "OpenStreetMap contact tag", confidence: "HIGH" });
-    }
-    const linkedin = tags["contact:linkedin"] || tags.linkedin;
-    if (linkedin && typeof linkedin === "string" && linkedin.trim().length > 5) {
-      const cleanLi = linkedin.startsWith("http") ? linkedin.trim() : `https://www.linkedin.com/company/${linkedin.trim()}`;
-      result.socialLinks.linkedin = cleanLi;
-      result.evidence.push({ field: "linkedin", value: cleanLi, url: cleanLi, method: "OpenStreetMap contact tag", confidence: "HIGH" });
-    }
-    const twitter = tags["contact:twitter"] || tags.twitter;
-    if (twitter && typeof twitter === "string" && twitter.trim().length > 2) {
-      const cleanTw = twitter.startsWith("http") ? twitter.trim() : `https://x.com/${twitter.trim().replace(/^@/, "")}`;
-      result.socialLinks.twitter = cleanTw;
-      result.evidence.push({ field: "twitter", value: cleanTw, url: cleanTw, method: "OpenStreetMap contact tag", confidence: "HIGH" });
-    }
-    const phone = tags.phone || tags["contact:phone"];
-    if (phone && !result.phone) {
-      result.phone = String(phone).trim();
-      result.evidence.push({ field: "phone", value: result.phone, url: "https://www.openstreetmap.org/", method: "OpenStreetMap contact:phone tag", confidence: "HIGH" });
-    }
-    const email = tags.email || tags["contact:email"];
-    if (email && !result.email) {
-      result.email = String(email).trim().toLowerCase();
-      result.evidence.push({ field: "email", value: result.email, url: "https://www.openstreetmap.org/", method: "OpenStreetMap contact:email tag", confidence: "HIGH" });
-    }
-  }
-  static generateSocialSlugs(companyName, city) {
-    const cleanName = companyName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, "").trim();
-    const noSpaces = cleanName.replace(/\s+/g, "");
-    const hyphenated = cleanName.replace(/\s+/g, ".");
-    const slugs = [noSpaces, hyphenated];
-    if (city) {
-      const cleanCity = city.toLowerCase().replace(/[^a-z0-9]/g, "");
-      slugs.push(`${noSpaces}${cleanCity}`);
-      slugs.push(`${hyphenated}.${cleanCity}`);
-    }
-    return slugs.filter((s) => s.length >= 4);
-  }
-  static extractPhoneFromText(text2) {
-    const phoneRegex = /(?:(?:\+|00)(?:[1-9]\d{0,2})[\s.-]*)?(?:\(?\d{1,4}\)?[\s.-]*)?\d{2,4}[\s.-]*\d{2,4}[\s.-]*\d{2,4}/g;
-    const matches = text2.match(phoneRegex);
-    if (!matches) return void 0;
-    for (const match of matches) {
-      const digits = match.replace(/\D/g, "");
-      if (digits.length >= 8 && digits.length <= 13 && !digits.startsWith("0000") && !digits.startsWith("123456")) {
-        return match.trim().replace(/\s+/g, " ");
-      }
-    }
-    return void 0;
-  }
-  static extractEmailFromText(text2) {
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-    const matches = text2.match(emailRegex);
-    if (!matches) return void 0;
-    for (const match of matches) {
-      const email = match.toLowerCase().trim();
-      if (!email.includes("facebook") && !email.includes("instagram") && !email.includes("example.com") && !email.endsWith(".png")) {
-        return email;
-      }
-    }
-    return void 0;
-  }
-  static extractAddressFromText(text2, city) {
-    const regex = new RegExp(`(\\d{1,4}[^,\\n]{3,60}(?:street|st|rue|avenue|ave|boulevard|blvd|road|rd|chemin|strasse|str)[^,\\n]{0,40}${city})`, "i");
-    const match = text2.match(regex);
-    if (match && match[1]) {
-      return match[1].trim().replace(/\s+/g, " ");
-    }
-    return void 0;
-  }
-  static extractWebsiteFromBio(text2) {
-    const urlRegex = /(?:https?:\/\/|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\/[^\s,)]*)?/g;
-    const matches = text2.match(urlRegex);
-    if (!matches) return void 0;
-    for (const match of matches) {
-      const lower = match.toLowerCase();
-      if (!lower.includes("facebook.com") && !lower.includes("instagram.com") && !lower.includes("fb.me") && !lower.includes("twitter.com") && !lower.includes("bit.ly") && !lower.includes("linktr.ee")) {
-        return match.startsWith("http") ? match : `https://${match}`;
-      }
-    }
-    return void 0;
-  }
-};
-
 // src/services/jobService.ts
+init_socialEnrichmentService();
+init_monitoring();
 var JobService = class {
   static async createJob(userId, type, total) {
     const [job] = await db.insert(jobs).values({
@@ -4114,7 +4926,7 @@ var JobService = class {
       results.target = targetCount;
       let cells = [];
       const location = `${criteria.city || ""} ${criteria.country || ""}`.trim();
-      results.currentStep = "Calculating geographic partitions...";
+      results.currentStep = "Calcul des partitions g\xE9ographiques...";
       await this.updateJobProgress(jobId, results.newLeadsSaved || 0, "running", results);
       const masterBbox = await GridPartitionService.getBoundingBox(location);
       if (masterBbox) {
@@ -4142,8 +4954,8 @@ var JobService = class {
       const MAX_TIERS = 6;
       while (totalSaved < targetCount && expansionTier <= MAX_TIERS) {
         if (expansionTier > 1 && currentMasterBbox) {
-          const tierLabel = expansionTier === 2 ? "Metropolitan" : expansionTier === 3 ? "Agglomeration" : expansionTier === 4 ? "Department" : "Regional";
-          results.currentStep = `Target not yet reached (${totalSaved}/${targetCount}). Expanding search to ${tierLabel} area...`;
+          const tierLabel = expansionTier === 2 ? "m\xE9tropolitaine" : expansionTier === 3 ? "agglom\xE9ration" : expansionTier === 4 ? "d\xE9partementale" : "r\xE9gionale";
+          results.currentStep = `Recherche en cours (${totalSaved}/${targetCount} prospects). \xC9largissement \xE0 la zone ${tierLabel}...`;
           await this.updateJobProgress(jobId, totalSaved, "running", results);
           currentMasterBbox = GridPartitionService.expandBoundingBox(currentMasterBbox, 2.4);
           const divisions = GridPartitionService.calculateDivisions(currentMasterBbox, targetCount);
@@ -4151,17 +4963,17 @@ var JobService = class {
           results.cellsTotal = cells.length;
           results.cellsCompleted = 0;
         }
-        for (let cellIdx = 0; cellIdx < cells.length; cellIdx++) {
+        for (let cellIdx = startCellIdx; cellIdx < cells.length; cellIdx++) {
           if (totalSaved >= targetCount) break;
           const cell = cells[cellIdx];
-          results.currentCell = `${cellIdx + 1}/${cells.length} (Tier ${expansionTier})`;
-          results.currentStep = `Searching ${expansionTier === 1 ? "City" : expansionTier === 2 ? "Metro" : "Regional area"} (${totalSaved}/${targetCount} leads)...`;
+          results.currentCell = `Zone ${cellIdx + 1}/${cells.length} (Niveau ${expansionTier})`;
+          results.currentStep = `Extraction & qualification (${totalSaved}/${targetCount} prospects d\xE9couverts)...`;
           await this.updateJobProgress(jobId, totalSaved, "running", results);
           try {
             const needed = targetCount - totalSaved;
             const queryParams = {
               ...criteria,
-              limit: Math.min(Math.max(needed + 50, 150), 300)
+              limit: Math.min(Math.max(needed + 30, 80), 200)
             };
             if (cell) queryParams.bbox = cell;
             const rawLeads = await source.search(queryParams);
@@ -4169,30 +4981,46 @@ var JobService = class {
             if (rawLeads.length > 0 && rawLeads[0].rawData?.chainsExcludedCount) {
               results.chainsFiltered = (results.chainsFiltered || 0) + rawLeads[0].rawData.chainsExcludedCount;
             }
-            for (const rawLead of rawLeads) {
+            const BATCH_SIZE = 4;
+            for (let i = 0; i < rawLeads.length; i += BATCH_SIZE) {
               if (totalSaved >= targetCount) break;
-              const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
-                requireVerifiedContact: criteria.requireContactInfo !== false
-              });
-              if (status === "created" && lead) {
-                results.validBusinesses++;
-                results.newLeadsSaved++;
-                totalSaved++;
-                await this.enrichLead(lead, results);
-                if (totalSaved % 3 === 0 || totalSaved >= targetCount) {
-                  await this.updateJobProgress(jobId, totalSaved, "running", results);
+              const chunk = rawLeads.slice(i, i + BATCH_SIZE);
+              const chunkPromises = chunk.map(async (rawLead) => {
+                if (totalSaved >= targetCount) return null;
+                if (criteria.intentMode === "NO_WEBSITE" || criteria.targetNoWebsite) {
+                  const hasOfficialWeb = rawLead.website && !rawLead.website.includes("facebook.com") && !rawLead.website.includes("instagram.com") && !rawLead.website.includes("linkedin.com");
+                  if (hasOfficialWeb) {
+                    return null;
+                  }
                 }
-              } else if (status === "rejected_unverified") {
-                results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
-              } else {
-                results.duplicates++;
+                if (criteria.intentMode === "DIRECT_CALL" || criteria.requireDirectPhone) {
+                  if (!rawLead.phone || rawLead.phone.trim().length < 6) {
+                    return null;
+                  }
+                }
+                const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
+                  requireVerifiedContact: criteria.requireContactInfo !== false
+                });
+                if (status === "created" && lead) {
+                  results.validBusinesses++;
+                  results.newLeadsSaved++;
+                  totalSaved++;
+                  await this.enrichLead(lead, results);
+                  return lead;
+                } else if (status === "rejected_unverified") {
+                  results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
+                } else {
+                  results.duplicates++;
+                }
+                return null;
+              });
+              await Promise.allSettled(chunkPromises);
+              if (totalSaved % 2 === 0 || totalSaved >= targetCount) {
+                await this.updateJobProgress(jobId, totalSaved, "running", results);
               }
             }
             results.cellsCompleted = cellIdx + 1;
             await this.updateJobProgress(jobId, totalSaved, "running", results);
-            if (cellIdx < cells.length - 1 && totalSaved < targetCount) {
-              await new Promise((resolve) => setTimeout(resolve, 400));
-            }
           } catch (cellErr) {
             await logger.error("JOB", `Discovery issue in Tier ${expansionTier}: ${cellErr.message}`, cellErr, { jobId, cellIdx });
             results.cellsCompleted = cellIdx + 1;
@@ -4206,17 +5034,24 @@ var JobService = class {
         }
       }
       if (totalSaved < targetCount && (criteria.city || criteria.country) && criteria.category) {
-        results.currentStep = `Executing complementary discovery wave to reach ${targetCount} leads...`;
+        results.currentStep = `Vague compl\xE9mentaire de d\xE9couverte pour atteindre ${targetCount} prospects...`;
         await this.updateJobProgress(jobId, totalSaved, "running", results);
         try {
           const needed = targetCount - totalSaved;
-          const loc = [criteria.city, criteria.country].filter(Boolean).join(" ");
-          const categoryWords = [criteria.category];
-          for (const word of categoryWords) {
+          const fallbackLeads = await source.searchNominatim?.(criteria.category, criteria.city, criteria.country, needed + 15) || [];
+          const BATCH_SIZE = 4;
+          for (let i = 0; i < fallbackLeads.length; i += BATCH_SIZE) {
             if (totalSaved >= targetCount) break;
-            const fallbackLeads = await source.searchNominatim?.(word, criteria.city, criteria.country, needed + 20) || [];
-            for (const rawLead of fallbackLeads) {
-              if (totalSaved >= targetCount) break;
+            const chunk = fallbackLeads.slice(i, i + BATCH_SIZE);
+            await Promise.allSettled(chunk.map(async (rawLead) => {
+              if (totalSaved >= targetCount) return;
+              if (criteria.intentMode === "NO_WEBSITE" || criteria.targetNoWebsite) {
+                const hasOfficialWeb = rawLead.website && !rawLead.website.includes("facebook.com") && !rawLead.website.includes("instagram.com") && !rawLead.website.includes("linkedin.com");
+                if (hasOfficialWeb) return;
+              }
+              if (criteria.intentMode === "DIRECT_CALL" || criteria.requireDirectPhone) {
+                if (!rawLead.phone || rawLead.phone.trim().length < 6) return;
+              }
               const { lead, status } = await LeadService.createLead(rawLead, campaignId, {
                 requireVerifiedContact: criteria.requireContactInfo !== false
               });
@@ -4225,18 +5060,18 @@ var JobService = class {
                 results.newLeadsSaved++;
                 totalSaved++;
                 await this.enrichLead(lead, results);
-                await this.updateJobProgress(jobId, totalSaved, "running", results);
               } else if (status === "rejected_unverified") {
                 results.unverifiedFiltered = (results.unverifiedFiltered || 0) + 1;
               }
-            }
+            }));
+            await this.updateJobProgress(jobId, totalSaved, "running", results);
           }
         } catch (e) {
           console.warn("Secondary discovery wave warning:", e.message);
         }
       }
-      results.currentStep = `Completed. Discovered ${results.validBusinesses} leads.`;
-      results.currentCell = "Completed";
+      results.currentStep = `Termin\xE9 avec succ\xE8s. ${results.validBusinesses} prospects qualifi\xE9s d\xE9couverts.`;
+      results.currentCell = "Termin\xE9";
       await this.updateJobProgress(jobId, totalSaved, "completed", results);
       await metrics.record("JOB", "LEAD_GEN", "SUCCESS", Date.now() - startTime, { jobId, totalSaved });
     } catch (error) {
@@ -4357,9 +5192,9 @@ ${extraNotes.join("\n")}` : extraNotes.join("\n");
             lastEnrichedAt: /* @__PURE__ */ new Date(),
             enrichmentSource: "SOCIAL_MEDIA"
           };
-          if (socialResult.socialUrl) {
-            updateObj.website = socialResult.socialUrl;
-            updateObj.websiteStatus = "social_profile";
+          if (socialResult.discoveredWebsite && !lead.website) {
+            updateObj.website = socialResult.discoveredWebsite;
+            updateObj.websiteStatus = "verified";
             updateObj.websiteConfidence = "HIGH";
             results.verifiedWebsites = (results.verifiedWebsites || 0) + 1;
           }
@@ -4428,6 +5263,7 @@ Bio: ${socialResult.bio}` : `Bio: ${socialResult.bio}`;
 // src/services/aiService.ts
 init_db();
 init_schema();
+init_monitoring();
 import { GoogleGenAI as GoogleGenAI2 } from "@google/genai";
 import { eq as eq6, and as and4, desc as desc2 } from "drizzle-orm";
 import crypto from "crypto";
@@ -4568,7 +5404,8 @@ STRICT ARCHITECTURE & SAFETY RULES:
 3. NO HALLUCINATIONS: Do not invent revenue, employee counts, traffic numbers, Google rankings, or specific business problems not found in the evidence.
 4. EVIDENCE LOCK: Every factual claim must be supported by the provided findings or opportunities.
 5. NO UNSUPPORTED PROMISES: Do not claim that changes will "double sales" or "guarantee results". Use ${isFrench ? '"pourrait am\xE9liorer" ou "opportunit\xE9 potentielle"' : '"could improve" or "potential opportunity"'}.
-6. TONE: ${toneInstruction}
+6. STRICT CONSISTENCY WITH SCORES: If an audit category has a high score (e.g. SEO score >= 75/100, Performance >= 75/100), acknowledge it as a strong point ("strengths"). DO NOT claim their SEO or site speed is bad if the score is good! Instead, focus your sales angles on what actually scored low (e.g. Conversion, WhatsApp 1-clic, Booking, Local Business Schema, or Absence of website).
+7. TONE: ${toneInstruction}
 ${languageInstruction}
 
 INPUT DATA:
@@ -4798,13 +5635,14 @@ var CRMService = class {
 };
 
 // src/app.ts
+init_socialEnrichmentService();
 init_db();
 init_schema();
-import { eq as eq8, and as and6, sql as sql2, desc as desc3, isNull, isNotNull, ilike, or, gt, lt, ne } from "drizzle-orm";
+import { eq as eq8, and as and6, sql, desc as desc3, asc, isNull, isNotNull, ilike, or, lt, gte, lte, ne, inArray } from "drizzle-orm";
 import Papa from "papaparse";
 dotenv.config();
 var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = path2.dirname(__filename2);
+var __dirname2 = path3.dirname(__filename2);
 function createServerApp() {
   const app2 = express();
   app2.use(express.json());
@@ -4812,10 +5650,16 @@ function createServerApp() {
     try {
       const { checkDbHealth: checkDbHealth2 } = await Promise.resolve().then(() => (init_db(), db_exports));
       const dbStatus = await checkDbHealth2();
+      const scraplingReady = await ScraplingService.isReady();
       res.json({
         status: "ok",
         environment: process.env.NODE_ENV,
         database: dbStatus,
+        scrapling: {
+          engine: "D4Vinci/Scrapling",
+          ready: scraplingReady,
+          stealthBypass: true
+        },
         timestamp: (/* @__PURE__ */ new Date()).toISOString()
       });
     } catch (err) {
@@ -4896,21 +5740,21 @@ function createServerApp() {
         filterConditions.push(eq8(campaigns.userId, user.id));
       }
       const counts = await db.select({
-        total: sql2`count(*)`,
-        new: sql2`count(*) filter (where lead_status = 'NEW')`,
-        reviewed: sql2`count(*) filter (where lead_status = 'REVIEWED')`,
-        qualified: sql2`count(*) filter (where lead_status = 'QUALIFIED')`,
-        contacted: sql2`count(*) filter (where lead_status = 'CONTACTED')`,
-        replied: sql2`count(*) filter (where lead_status = 'REPLIED')`,
-        won: sql2`count(*) filter (where lead_status = 'WON')`,
-        websitesFound: sql2`count(*) filter (where website_status = 'verified')`,
-        websitesMissing: sql2`count(*) filter (where website_status = 'not_detected')`,
-        highOpportunity: sql2`count(*) filter (where opportunity_score > 60)`
-      }).from(leads).innerJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...filterConditions));
+        total: sql`count(*)`,
+        new: sql`count(*) filter (where ${leads.leadStatus} = 'NEW')`,
+        reviewed: sql`count(*) filter (where ${leads.leadStatus} = 'REVIEWED')`,
+        qualified: sql`count(*) filter (where ${leads.leadStatus} = 'QUALIFIED')`,
+        contacted: sql`count(*) filter (where ${leads.leadStatus} = 'CONTACTED')`,
+        replied: sql`count(*) filter (where ${leads.leadStatus} = 'REPLIED')`,
+        won: sql`count(*) filter (where ${leads.leadStatus} = 'WON')`,
+        websitesFound: sql`count(*) filter (where ${leads.websiteStatus} = 'verified')`,
+        websitesMissing: sql`count(*) filter (where ${leads.websiteStatus} = 'not_detected')`,
+        highOpportunity: sql`count(*) filter (where ${leads.opportunityScore} > 60)`
+      }).from(leads).leftJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...filterConditions));
       const oppCounts = await db.select({
         type: opportunities.type,
-        count: sql2`count(*)`
-      }).from(opportunities).innerJoin(leads, eq8(opportunities.leadId, leads.id)).innerJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...filterConditions)).groupBy(opportunities.type);
+        count: sql`count(*)`
+      }).from(opportunities).innerJoin(leads, eq8(opportunities.leadId, leads.id)).leftJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...filterConditions)).groupBy(opportunities.type);
       console.log("[DASHBOARD] Stats successfully retrieved");
       res.json({
         success: true,
@@ -4924,52 +5768,247 @@ function createServerApp() {
       res.status(500).json({ success: false, error: "Failed to load dashboard stats", message: error.message, stack: process.env.NODE_ENV === "development" ? error.stack : void 0 });
     }
   });
+  function buildLeadConditions(query, userId) {
+    const conditions = [isNull(leads.deletedAt)];
+    if (query.scope === "personal" && userId) {
+      conditions.push(eq8(campaigns.userId, userId));
+    }
+    if (query.search && typeof query.search === "string") {
+      const rawSearch = query.search.trim();
+      if (rawSearch) {
+        const terms = rawSearch.split(/\s+/).filter(Boolean);
+        for (const term of terms) {
+          const pattern = `%${term}%`;
+          const digitsOnly = term.replace(/[^\d]/g, "");
+          const phoneMatch = digitsOnly.length >= 2 ? or(
+            ilike(leads.normalizedPhone, `%${digitsOnly}%`),
+            ilike(leads.phone, `%${digitsOnly}%`)
+          ) : null;
+          const termConditions = [
+            ilike(leads.companyName, pattern),
+            ilike(leads.city, pattern),
+            ilike(leads.category, pattern),
+            ilike(leads.address, pattern),
+            ilike(leads.website, pattern),
+            ilike(leads.email, pattern),
+            ilike(leads.notes, pattern),
+            ilike(leads.phone, pattern)
+          ];
+          if (phoneMatch) {
+            termConditions.push(phoneMatch);
+          }
+          conditions.push(or(...termConditions));
+        }
+      }
+    }
+    const statusParam = query.status;
+    if (statusParam && statusParam !== "ALL" && statusParam !== "all") {
+      const statuses = (Array.isArray(statusParam) ? statusParam : String(statusParam).split(",")).map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+      if (statuses.length === 1) {
+        conditions.push(eq8(leads.leadStatus, statuses[0]));
+      } else if (statuses.length > 1) {
+        conditions.push(inArray(leads.leadStatus, statuses));
+      }
+    }
+    if (query.city && query.city !== "ALL" && query.city !== "all") {
+      const cities = String(query.city).split(",").map((c) => c.trim()).filter(Boolean);
+      if (cities.length === 1) {
+        conditions.push(ilike(leads.city, `%${cities[0]}%`));
+      } else if (cities.length > 1) {
+        conditions.push(or(...cities.map((c) => ilike(leads.city, `%${c}%`))));
+      }
+    }
+    if (query.category && query.category !== "ALL" && query.category !== "all") {
+      const cats = String(query.category).split(",").map((c) => c.trim()).filter(Boolean);
+      if (cats.length === 1) {
+        conditions.push(ilike(leads.category, `%${cats[0]}%`));
+      } else if (cats.length > 1) {
+        conditions.push(or(...cats.map((c) => ilike(leads.category, `%${c}%`))));
+      }
+    }
+    if (query.country && query.country !== "ALL" && query.country !== "all") {
+      conditions.push(ilike(leads.country, `%${String(query.country).trim()}%`));
+    }
+    const contact = query.contactFilter || query.contact;
+    if (contact === "valid_contact" || query.onlyValidContact === "true") {
+      conditions.push(or(
+        and6(isNotNull(leads.phone), ne(leads.phone, "")),
+        and6(isNotNull(leads.email), ne(leads.email, "")),
+        and6(isNotNull(leads.website), ne(leads.website, ""))
+      ));
+    } else if (contact === "has_phone" || query.hasPhone === "true") {
+      conditions.push(and6(isNotNull(leads.phone), ne(leads.phone, "")));
+    } else if (contact === "missing_phone" || query.hasPhone === "false") {
+      conditions.push(or(isNull(leads.phone), eq8(leads.phone, "")));
+    } else if (contact === "has_email" || query.hasEmail === "true") {
+      conditions.push(and6(isNotNull(leads.email), ne(leads.email, "")));
+    } else if (contact === "missing_email" || query.hasEmail === "false") {
+      conditions.push(or(isNull(leads.email), eq8(leads.email, "")));
+    } else if (contact === "has_both") {
+      conditions.push(and6(
+        isNotNull(leads.phone),
+        ne(leads.phone, ""),
+        isNotNull(leads.email),
+        ne(leads.email, "")
+      ));
+    } else if (contact === "has_either") {
+      conditions.push(or(
+        and6(isNotNull(leads.phone), ne(leads.phone, "")),
+        and6(isNotNull(leads.email), ne(leads.email, ""))
+      ));
+    } else {
+      conditions.push(or(
+        and6(isNotNull(leads.phone), ne(leads.phone, "")),
+        and6(isNotNull(leads.email), ne(leads.email, "")),
+        and6(isNotNull(leads.website), ne(leads.website, ""))
+      ));
+    }
+    const web = query.websiteFilter || query.hasWebsite;
+    if (web === "has_website" || web === "true") {
+      conditions.push(and6(isNotNull(leads.website), ne(leads.website, "")));
+    } else if (web === "no_website" || web === "false") {
+      conditions.push(or(isNull(leads.website), eq8(leads.website, "")));
+    } else if (web === "verified") {
+      conditions.push(eq8(leads.websiteStatus, "verified"));
+    } else if (web === "not_detected") {
+      conditions.push(eq8(leads.websiteStatus, "not_detected"));
+    } else if (web === "unreachable") {
+      conditions.push(eq8(leads.websiteStatus, "unreachable"));
+    } else if (web === "social_profile") {
+      conditions.push(eq8(leads.websiteStatus, "social_profile"));
+    }
+    if (query.websiteStatus && query.websiteStatus !== "all" && query.websiteStatus !== "ALL") {
+      conditions.push(eq8(leads.websiteStatus, String(query.websiteStatus)));
+    }
+    const oppRange = query.oppScoreRange || query.opportunityFilter;
+    if (oppRange === "high") {
+      conditions.push(gte(leads.opportunityScore, 60));
+    } else if (oppRange === "medium") {
+      conditions.push(and6(gte(leads.opportunityScore, 30), lt(leads.opportunityScore, 60)));
+    } else if (oppRange === "low") {
+      conditions.push(lt(leads.opportunityScore, 30));
+    }
+    if (query.minOppScore) conditions.push(gte(leads.opportunityScore, parseInt(query.minOppScore)));
+    if (query.maxOppScore) conditions.push(lte(leads.opportunityScore, parseInt(query.maxOppScore)));
+    const auditFilter = query.auditFilter;
+    if (auditFilter === "audited") {
+      conditions.push(isNotNull(leads.auditScore));
+    } else if (auditFilter === "not_audited") {
+      conditions.push(isNull(leads.auditScore));
+    } else if (auditFilter === "good") {
+      conditions.push(gte(leads.auditScore, 70));
+    } else if (auditFilter === "needs_work") {
+      conditions.push(and6(isNotNull(leads.auditScore), lt(leads.auditScore, 70)));
+    }
+    if (query.minAuditScore) conditions.push(gte(leads.auditScore, parseInt(query.minAuditScore)));
+    if (query.maxAuditScore) conditions.push(lte(leads.auditScore, parseInt(query.maxAuditScore)));
+    if (query.confidence && query.confidence !== "ALL" && query.confidence !== "all") {
+      conditions.push(eq8(leads.dataConfidence, String(query.confidence).toUpperCase()));
+    } else {
+      conditions.push(eq8(leads.dataConfidence, "HIGH"));
+    }
+    conditions.push(isNotNull(leads.address));
+    conditions.push(ne(leads.address, ""));
+    conditions.push(isNotNull(leads.city));
+    conditions.push(ne(leads.city, ""));
+    conditions.push(isNotNull(leads.phone));
+    conditions.push(ne(leads.phone, ""));
+    const intentFilter = query.intentFilter;
+    if (intentFilter === "high_intent") {
+      conditions.push(gte(leads.opportunityScore, 65));
+    } else if (intentFilter === "no_website") {
+      conditions.push(or(
+        isNull(leads.website),
+        eq8(leads.website, ""),
+        eq8(leads.websiteStatus, "social_profile"),
+        eq8(leads.websiteStatus, "not_detected")
+      ));
+    } else if (intentFilter === "call_ready") {
+      conditions.push(and6(
+        isNotNull(leads.phone),
+        ne(leads.phone, ""),
+        gte(leads.opportunityScore, 45)
+      ));
+    } else if (intentFilter === "high_ticket") {
+      const highKeywords = ["dentist", "dentaire", "plombier", "plumber", "electricien", "electrician", "avocat", "lawyer", "architect", "notaire", "mecanic", "garage", "restaurant", "chauffagiste", "hvac"];
+      conditions.push(or(...highKeywords.map((k) => ilike(leads.category, `%${k}%`))));
+    }
+    return conditions;
+  }
+  app2.get("/api/leads/filter-options", async (req, res) => {
+    try {
+      if (!req.user?.uid) return res.status(401).json({ success: false, error: "Unauthorized" });
+      const distinctCities = await db.select({
+        city: leads.city,
+        count: sql`count(*)`
+      }).from(leads).where(and6(isNull(leads.deletedAt), isNotNull(leads.city), ne(leads.city, ""))).groupBy(leads.city).orderBy(desc3(sql`count(*)`)).limit(60);
+      const distinctCategories = await db.select({
+        category: leads.category,
+        count: sql`count(*)`
+      }).from(leads).where(and6(isNull(leads.deletedAt), isNotNull(leads.category), ne(leads.category, ""))).groupBy(leads.category).orderBy(desc3(sql`count(*)`)).limit(60);
+      const statusCounts = await db.select({
+        status: leads.leadStatus,
+        count: sql`count(*)`
+      }).from(leads).where(isNull(leads.deletedAt)).groupBy(leads.leadStatus);
+      const summaryRes = await db.select({
+        total: sql`count(*)`,
+        withValidContact: sql`count(*) filter (where (phone is not null and phone != '') or (email is not null and email != ''))`,
+        withPhone: sql`count(*) filter (where phone is not null and phone != '')`,
+        withEmail: sql`count(*) filter (where email is not null and email != '')`,
+        withWebsite: sql`count(*) filter (where website is not null and website != '')`,
+        noWebsite: sql`count(*) filter (where website is null or website = '')`,
+        highOpportunity: sql`count(*) filter (where opportunity_score >= 60)`
+      }).from(leads).where(isNull(leads.deletedAt));
+      res.json({
+        success: true,
+        data: {
+          cities: distinctCities.filter((c) => Boolean(c.city)),
+          categories: distinctCategories.filter((c) => Boolean(c.category)),
+          statusCounts,
+          summary: summaryRes[0] || {}
+        }
+      });
+    } catch (error) {
+      console.error("[API-FILTER-OPTIONS] Error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
   app2.get("/api/leads", async (req, res) => {
     try {
       if (!req.user?.uid) return res.status(401).json({ success: false, error: "Unauthorized" });
       const user = await getOrCreateUser(req.user.uid, req.user.email);
       const {
-        status,
-        country,
-        city,
-        category,
-        minOppScore,
-        maxOppScore,
         sortBy = "createdAt",
         sortOrder = "desc",
         page = "1",
-        limit = "50",
-        search,
-        hasWebsite,
-        scope = "team"
+        limit = "50"
       } = req.query;
-      const conditions = [
-        isNull(leads.deletedAt)
-      ];
-      if (scope === "personal") {
-        conditions.push(eq8(campaigns.userId, user.id));
-      }
-      if (status) conditions.push(eq8(leads.leadStatus, status));
-      if (country) conditions.push(eq8(leads.country, country));
-      if (city) conditions.push(eq8(leads.city, city));
-      if (category) conditions.push(eq8(leads.category, category));
-      if (minOppScore) conditions.push(gt(leads.opportunityScore, parseInt(minOppScore)));
-      if (maxOppScore) conditions.push(lt(leads.opportunityScore, parseInt(maxOppScore)));
-      if (hasWebsite === "true") {
-        conditions.push(and6(isNotNull(leads.website), ne(leads.website, "")));
-      } else if (hasWebsite === "false") {
-        conditions.push(or(isNull(leads.website), eq8(leads.website, "")));
-      }
-      if (search) {
-        conditions.push(or(
-          ilike(leads.companyName, `%${search}%`),
-          ilike(leads.website || "", `%${search}%`),
-          ilike(leads.email || "", `%${search}%`)
-        ));
-      }
-      const offset = (parseInt(page) - 1) * parseInt(limit);
-      const results = await db.select().from(leads).innerJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...conditions)).orderBy(sortOrder === "desc" ? desc3(leads[sortBy]) : leads[sortBy]).limit(parseInt(limit)).offset(offset);
-      res.json({ success: true, data: results.map((l) => l.leads) });
+      const conditions = buildLeadConditions(req.query, user.id);
+      const totalCountRes = await db.select({ count: sql`count(*)` }).from(leads).leftJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...conditions));
+      const total = Number(totalCountRes[0]?.count || 0);
+      const pageNum = Math.max(1, parseInt(page) || 1);
+      const limitNum = Math.min(500, Math.max(1, parseInt(limit) || 50));
+      const offset = (pageNum - 1) * limitNum;
+      const validSortColumns = {
+        createdAt: leads.createdAt,
+        opportunityScore: leads.opportunityScore,
+        auditScore: leads.auditScore,
+        companyName: leads.companyName,
+        city: leads.city,
+        category: leads.category,
+        leadStatus: leads.leadStatus
+      };
+      const sortColumn = validSortColumns[sortBy] || leads.createdAt;
+      const orderDirective = sortOrder === "asc" ? asc(sortColumn) : desc3(sortColumn);
+      const results = await db.select().from(leads).leftJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...conditions)).orderBy(orderDirective).limit(limitNum).offset(offset);
+      res.json({
+        success: true,
+        data: results.map((l) => l.leads),
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1
+      });
     } catch (error) {
       console.error("[API-LEADS] Fetch failure:", error);
       res.status(500).json({ success: false, error: "Failed to load leads", message: error.message });
@@ -4981,38 +6020,38 @@ function createServerApp() {
       const sourceMetrics = await db.select({
         source: requestMetrics.source,
         status: requestMetrics.status,
-        count: sql2`count(*)`,
-        avgDuration: sql2`avg(duration_ms)`,
-        lastRun: sql2`max(created_at)`
+        count: sql`count(*)`,
+        avgDuration: sql`avg(duration_ms)`,
+        lastRun: sql`max(created_at)`
       }).from(requestMetrics).groupBy(requestMetrics.source, requestMetrics.status);
       const leadQuality = await db.select({
-        total: sql2`count(*)`,
-        missingPhone: sql2`count(*) filter (where phone is null)`,
-        missingWebsite: sql2`count(*) filter (where website is null)`,
-        missingAddress: sql2`count(*) filter (where address is null)`,
-        missingCategory: sql2`count(*) filter (where category is null)`,
-        verifiedWebsites: sql2`count(*) filter (where website_status = 'verified')`,
-        unreachableWebsites: sql2`count(*) filter (where website_status = 'unreachable')`,
-        unknownWebsites: sql2`count(*) filter (where website_status = 'unknown')`
+        total: sql`count(*)`,
+        missingPhone: sql`count(*) filter (where phone is null)`,
+        missingWebsite: sql`count(*) filter (where website is null)`,
+        missingAddress: sql`count(*) filter (where address is null)`,
+        missingCategory: sql`count(*) filter (where category is null)`,
+        verifiedWebsites: sql`count(*) filter (where website_status = 'verified')`,
+        unreachableWebsites: sql`count(*) filter (where website_status = 'unreachable')`,
+        unknownWebsites: sql`count(*) filter (where website_status = 'unknown')`
       }).from(leads);
       const auditStats = await db.select({
-        total: sql2`count(*)`,
-        completed: sql2`count(*) filter (where status = 'completed')`,
-        failed: sql2`count(*) filter (where status = 'failed')`,
-        avgDuration: sql2`avg(extract(epoch from (completed_at - created_at)) * 1000)`,
-        avgScore: sql2`avg(overall_score)`
+        total: sql`count(*)`,
+        completed: sql`count(*) filter (where status = 'completed')`,
+        failed: sql`count(*) filter (where status = 'failed')`,
+        avgDuration: sql`avg(extract(epoch from (completed_at - created_at)) * 1000)`,
+        avgScore: sql`avg(overall_score)`
       }).from(audits);
       const aiStats = await db.select({
-        total: sql2`count(*)`,
-        avgTokens: sql2`avg(token_count)`,
-        totalCost: sql2`sum(estimated_cost)`,
-        success: sql2`count(*) filter (where status = 'SUCCESS')`,
-        failed: sql2`count(*) filter (where status = 'FAILURE')`
+        total: sql`count(*)`,
+        avgTokens: sql`avg(token_count)`,
+        totalCost: sql`sum(estimated_cost)`,
+        success: sql`count(*) filter (where status = 'SUCCESS')`,
+        failed: sql`count(*) filter (where status = 'FAILURE')`
       }).from(requestMetrics).where(eq8(requestMetrics.category, "AI"));
       const reviewStats = await db.select({
         entityType: qualityReviews.entityType,
         isCorrect: qualityReviews.isCorrect,
-        count: sql2`count(*)`
+        count: sql`count(*)`
       }).from(qualityReviews).groupBy(qualityReviews.entityType, qualityReviews.isCorrect);
       res.json({
         success: true,
@@ -5152,20 +6191,20 @@ function createServerApp() {
     try {
       const user = await getOrCreateUser(req.user.uid, req.user.email);
       const stats = await db.select({
-        total: sql2`count(*)`,
-        withWebsite: sql2`count(*) filter (where website is not null)`,
-        verifiedWebsite: sql2`count(*) filter (where website_status = 'verified')`,
-        unreachableWebsite: sql2`count(*) filter (where website_status = 'unreachable')`,
-        notDetectedWebsite: sql2`count(*) filter (where website_status = 'not_detected')`,
-        withPhone: sql2`count(*) filter (where phone is not null)`,
-        withEmail: sql2`count(*) filter (where email is not null)`,
-        audited: sql2`count(*) filter (where audit_score is not null)`,
-        analyzed: sql2`count(*) filter (where lead_status != 'NEW')`
+        total: sql`count(*)`,
+        withWebsite: sql`count(*) filter (where website is not null)`,
+        verifiedWebsite: sql`count(*) filter (where website_status = 'verified')`,
+        unreachableWebsite: sql`count(*) filter (where website_status = 'unreachable')`,
+        notDetectedWebsite: sql`count(*) filter (where website_status = 'not_detected')`,
+        withPhone: sql`count(*) filter (where phone is not null)`,
+        withEmail: sql`count(*) filter (where email is not null)`,
+        audited: sql`count(*) filter (where audit_score is not null)`,
+        analyzed: sql`count(*) filter (where lead_status != 'NEW')`
       }).from(leads).innerJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(eq8(campaigns.userId, user.id));
       const sourceStats = await db.select({
         source: leads.source,
-        count: sql2`count(*)`,
-        avgOppScore: sql2`avg(opportunity_score)`
+        count: sql`count(*)`,
+        avgOppScore: sql`avg(opportunity_score)`
       }).from(leads).innerJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(eq8(campaigns.userId, user.id)).groupBy(leads.source);
       res.json({ success: true, data: { overall: stats[0], sources: sourceStats } });
     } catch (error) {
@@ -5175,17 +6214,58 @@ function createServerApp() {
   app2.get("/api/leads/export", async (req, res) => {
     try {
       const user = await getOrCreateUser(req.user.uid, req.user.email);
-      const { scope = "team" } = req.query;
-      const whereConditions = [isNull(leads.deletedAt)];
-      if (scope === "personal") {
-        whereConditions.push(eq8(campaigns.userId, user.id));
-      }
-      const userLeads = await db.select().from(leads).innerJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...whereConditions));
+      const conditions = buildLeadConditions(req.query, user.id);
+      const userLeads = await db.select().from(leads).leftJoin(campaigns, eq8(leads.campaignId, campaigns.id)).where(and6(...conditions)).orderBy(desc3(leads.createdAt));
       const flatLeads = userLeads.map((l) => l.leads);
-      const csv = Papa.unparse(flatLeads);
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", "attachment; filename=leads-export.csv");
-      res.send(csv);
+      const frenchExport = flatLeads.map((l) => ({
+        "Entreprise": l.companyName || "",
+        "Activit\xE9 / M\xE9tier": l.category || "",
+        "Ville": l.city || "",
+        "Adresse": l.address || "",
+        "Pays": l.country || "France",
+        "T\xE9l\xE9phone": l.phone || "",
+        "Email": l.email || "",
+        "Site Web": l.website || "",
+        "Statut du Site": l.websiteStatus === "verified" ? "V\xE9rifi\xE9" : l.websiteStatus === "not_detected" ? "Non d\xE9tect\xE9" : l.websiteStatus === "unreachable" ? "Inaccessible" : "Inconnu",
+        "Fiabilit\xE9 Donn\xE9es": l.dataConfidence || "MOYENNE",
+        "Score Opportunit\xE9": l.opportunityScore ?? 0,
+        "Score Audit": l.auditScore ?? "\u2014",
+        "Statut Prospection": l.leadStatus || "NOUVEAU",
+        "Notes & Mentions": l.notes || "",
+        "Date D\xE9couverte": l.createdAt ? new Date(l.createdAt).toLocaleDateString("fr-FR") : ""
+      }));
+      const csv = Papa.unparse(frenchExport);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="prospects-leadforge-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.csv"`);
+      res.send("\uFEFF" + csv);
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+  app2.post("/api/leads/clean-database", async (req, res) => {
+    try {
+      const allLeads = await db.select().from(leads).where(isNull(leads.deletedAt));
+      const { NormalizationService: NormalizationService2 } = await Promise.resolve().then(() => (init_leadService(), leadService_exports));
+      let updatedCount = 0;
+      for (const lead of allLeads) {
+        const formattedPhone = NormalizationService2.formatDisplayPhone(lead.phone, lead.country);
+        const quality = NormalizationService2.computeDataQuality({
+          phone: formattedPhone || lead.phone,
+          website: lead.website,
+          email: lead.email,
+          address: lead.address,
+          notes: lead.notes
+        });
+        if (formattedPhone !== lead.phone || lead.dataConfidence !== quality.confidence || lead.opportunityScore !== quality.score) {
+          await db.update(leads).set({
+            phone: formattedPhone || lead.phone,
+            dataConfidence: quality.confidence,
+            opportunityScore: quality.score
+          }).where(eq8(leads.id, lead.id));
+          updatedCount++;
+        }
+      }
+      res.json({ success: true, message: `${updatedCount} prospects normalis\xE9s et qualifi\xE9s avec succ\xE8s.`, totalScanned: allLeads.length });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -5343,9 +6423,9 @@ ${extraNotes.join("\n")}` : extraNotes.join("\n");
           }));
           await db.insert(fieldEvidence).values(evidenceBatch);
           const updateObj = { lastEnrichedAt: /* @__PURE__ */ new Date(), enrichmentSource: "SOCIAL_MEDIA" };
-          if (socialResult.socialUrl) {
-            updateObj.website = socialResult.socialUrl;
-            updateObj.websiteStatus = "social_profile";
+          if (socialResult.discoveredWebsite && !lead.website) {
+            updateObj.website = socialResult.discoveredWebsite;
+            updateObj.websiteStatus = "verified";
             updateObj.websiteConfidence = "HIGH";
           }
           if (!lead.phone && socialResult.phone) updateObj.phone = socialResult.phone;

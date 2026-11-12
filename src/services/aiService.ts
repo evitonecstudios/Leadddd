@@ -5,16 +5,36 @@ import { eq, and, desc } from 'drizzle-orm';
 import crypto from 'crypto';
 import { logger, metrics, estimateAiCost } from '../lib/monitoring.ts';
 
-const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const AI_MODELS = ['gemini-4-hydrogen', 'gemini-3.8-flash'] as const;
 
-const ai = new GoogleGenAI({
-  apiKey: API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
+let cachedClient: GoogleGenAI | null = null;
+let cachedKey = '';
+
+function getGeminiApiKey(): string {
+  return (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ''
+  ).trim();
+}
+
+function getGeminiClient(): GoogleGenAI | null {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) return null;
+  if (!cachedClient || cachedKey !== apiKey) {
+    cachedKey = apiKey;
+    cachedClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
   }
-});
+  return cachedClient;
+}
 
 export interface AIInput {
   lead: {
@@ -58,11 +78,12 @@ export interface AIInput {
 
 export class AIService {
   private static PROMPT_VERSION = 'v1.1';
-  private static DEFAULT_MODEL = 'gemini-3.8-flash';
+  private static DEFAULT_MODEL: string = AI_MODELS[0];
 
   static async generateAnalysis(leadId: number, input: AIInput, language = 'en', tone = 'professional') {
     const startTime = Date.now();
-    if (!API_KEY) {
+    const ai = getGeminiClient();
+    if (!ai) {
       await logger.error('AI', 'AI API Key missing', new Error('API key not configured'), { leadId }, 'GEMINI_API');
       throw new Error('GEMINI_API_KEY not configured');
     }
@@ -85,37 +106,42 @@ export class AIService {
     // 2. Prepare Prompt
     const prompt = this.buildPrompt(input, language, tone);
 
-    // 3. Call Gemini with Retry Logic
+    // 3. Call Gemini with Retry & Active Model Fallback
     let retries = 3;
     let delay = 2000;
-    let lastError: any;
+    let modelIndex = AI_MODELS.indexOf(this.DEFAULT_MODEL as (typeof AI_MODELS)[number]);
+    if (modelIndex < 0) modelIndex = 0;
 
     while (retries > 0) {
+      const currentModel = AI_MODELS[modelIndex] || this.DEFAULT_MODEL;
       try {
         const response = await ai.models.generateContent({
-          model: this.DEFAULT_MODEL,
+          model: currentModel,
           contents: prompt,
           config: {
             responseMimeType: "application/json"
           }
         });
 
-        const text = response.text;
-        if (!text) throw new Error('Empty response from Gemini');
-        
-        const parsedResult = JSON.parse(text);
+        const rawText = response.text;
+        if (!rawText) throw new Error('Empty response from Gemini');
+
+        const cleanedText = rawText.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
+        const parsedResult = JSON.parse(cleanedText);
+
+        this.DEFAULT_MODEL = currentModel;
 
         const usage = response.usageMetadata;
         const inputTokens = usage?.promptTokenCount || 0;
         const outputTokens = usage?.candidatesTokenCount || 0;
         const totalTokens = usage?.totalTokenCount || 0;
-        const cost = estimateAiCost(this.DEFAULT_MODEL, inputTokens, outputTokens);
+        const cost = estimateAiCost(currentModel, inputTokens, outputTokens);
 
         // 4. Persistence
         await db.insert(aiAnalyses).values({
           leadId,
           auditId: (input as any).auditId || null,
-          model: this.DEFAULT_MODEL,
+          model: currentModel,
           promptVersion: this.PROMPT_VERSION,
           inputHash,
           result: parsedResult,
@@ -125,7 +151,7 @@ export class AIService {
 
         await metrics.record('AI', 'GEMINI', 'SUCCESS', Date.now() - startTime, { 
           leadId, 
-          model: this.DEFAULT_MODEL,
+          model: currentModel,
           tokens: totalTokens,
           inputTokens,
           outputTokens,
@@ -134,9 +160,9 @@ export class AIService {
 
         return parsedResult;
       } catch (error: any) {
-        lastError = error;
-        const isRateLimit = error.message?.includes('429') || error.status === 429;
-        const isNotFound = error.message?.includes('404') || error.status === 404;
+        const msg = error?.message || String(error);
+        const isRateLimit = msg.includes('429') || error?.status === 429 || msg.includes('RESOURCE_EXHAUSTED');
+        const isNotFound = msg.includes('404') || error?.status === 404 || msg.includes('NOT_FOUND');
         
         if (isRateLimit && retries > 1) {
           await logger.warn('AI', `Gemini Rate Limit (429), retrying in ${delay}ms...`, { leadId, retriesLeft: retries - 1 }, 'GEMINI_API');
@@ -146,12 +172,18 @@ export class AIService {
           continue;
         }
 
+        if (isNotFound && modelIndex < AI_MODELS.length - 1) {
+          modelIndex++;
+          this.DEFAULT_MODEL = AI_MODELS[modelIndex];
+          continue;
+        }
+
         if (isNotFound) {
-          await logger.error('AI', `Gemini model ${this.DEFAULT_MODEL} not found or version mismatch`, error, { leadId }, 'GEMINI_API');
+          await logger.error('AI', `Gemini model ${currentModel} not found or version mismatch`, error, { leadId }, 'GEMINI_API');
           break;
         }
 
-        await logger.warn('AI', `Gemini Analysis failed, applying resilient localized fallback: ${error.message}`, { leadId, language }, 'GEMINI_API');
+        await logger.warn('AI', `Gemini Analysis failed, applying resilient localized fallback: ${msg}`, { leadId, language }, 'GEMINI_API');
         break;
       }
     }

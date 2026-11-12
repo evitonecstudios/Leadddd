@@ -71,25 +71,30 @@ export const metrics = {
 };
 
 export const AI_COSTS = {
-  'gemini-1.5-flash': {
-    input: 0.000125 / 1000,
-    output: 0.000375 / 1000,
+  'gemini-4-hydrogen': {
+    input: 0.0001 / 1000,
+    output: 0.0003 / 1000,
   },
-  'gemini-1.5-pro': {
+  'gemini-4-argon': {
+    input: 0.00125 / 1000,
+    output: 0.005 / 1000,
+  },
+  'gemini-4-carbon': {
     input: 0.0035 / 1000,
     output: 0.0105 / 1000,
   },
   'gemini-3.8-flash': {
-    input: 0.0001 / 1000, // Estimated
-    output: 0.0003 / 1000, // Estimated
-  }
+    input: 0.0001 / 1000,
+    output: 0.0003 / 1000,
+  },
 };
 
 export function estimateAiCost(model: string, inputTokens: number, outputTokens: number): number {
-  let modelKey = 'gemini-1.5-flash';
+  let modelKey: keyof typeof AI_COSTS = 'gemini-4-hydrogen';
   if (model.includes('3.8-flash')) modelKey = 'gemini-3.8-flash';
-  else if (model.includes('pro')) modelKey = 'gemini-1.5-pro';
-  const rates = AI_COSTS[modelKey as keyof typeof AI_COSTS];
+  else if (model.includes('argon')) modelKey = 'gemini-4-argon';
+  else if (model.includes('carbon')) modelKey = 'gemini-4-carbon';
+  const rates = AI_COSTS[modelKey];
   if (!rates) return 0;
   return (inputTokens * rates.input) + (outputTokens * rates.output);
 }

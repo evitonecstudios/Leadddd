@@ -88,8 +88,8 @@ export class ChainFilter {
   static isChainOrMajorBrand(tags: Record<string, any>, name?: string): boolean {
     if (!tags) tags = {};
 
-    // 1. Direct OpenStreetMap Chain/Brand tags
-    if (tags.brand || tags['brand:wikidata'] || tags['brand:wikipedia']) {
+    // 1. Direct OpenStreetMap Corporate Tags (Wikidata/Wikipedia usually means it's a major entity)
+    if (tags['brand:wikidata'] || tags['brand:wikipedia'] || tags['operator:wikidata'] || tags['operator:wikipedia']) {
       return true;
     }
 
@@ -97,20 +97,14 @@ export class ChainFilter {
       return true;
     }
 
+    // 2. Network Check (Transport or Banking networks are chains)
     if (tags.network && typeof tags.network === 'string' && tags.network.length > 2) {
-      return true;
+      const lowerNet = tags.network.toLowerCase();
+      if (['atm', 'bank', 'bus', 'train', 'metro', 'relay'].some(kw => lowerNet.includes(kw))) return true;
     }
 
-    // 2. Check Corporate Operator Tag
-    if (tags.operator && typeof tags.operator === 'string') {
-      const op = tags.operator.toLowerCase();
-      for (const chain of this.KNOWN_CHAINS) {
-        if (op.includes(chain)) return true;
-      }
-    }
-
-    // 3. Name Checking against Known Chains
-    const businessName = (name || tags.name || '').toLowerCase().trim();
+    // 3. Name & Brand Checking against Known Chains
+    const businessName = (name || tags.name || tags.brand || '').toLowerCase().trim();
     if (!businessName) return false;
 
     // Normalize accents and punctuation for robust matching
@@ -132,7 +126,15 @@ export class ChainFilter {
       }
     }
 
-    // 4. Exclude Public institutions, stations, and non-SMB amenities if tagged
+    // 4. Operator Tag check
+    if (tags.operator && typeof tags.operator === 'string') {
+      const op = tags.operator.toLowerCase();
+      for (const chain of this.KNOWN_CHAINS) {
+        if (op.includes(chain)) return true;
+      }
+    }
+
+    // 5. Exclude Public institutions, stations, and non-SMB amenities if tagged
     if (tags.amenity === 'police' || tags.amenity === 'fire_station' || tags.amenity === 'embassy' ||
         tags.amenity === 'courthouse' || tags.amenity === 'townhall' || tags.public_transport) {
       return true;
