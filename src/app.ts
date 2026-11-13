@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as dotenv from 'dotenv';
 import fs from 'fs';
+import { waitUntil } from '@vercel/functions';
 dotenv.config();
 
 import { requireAuth, AuthRequest } from './middleware/auth';
@@ -810,8 +811,9 @@ export function createServerApp() {
       const targetCount = criteria?.limit || criteria?.maxResults || 50;
       const job = await JobService.createJob(user.id, 'LEAD_GEN', targetCount);
       
-      // Run asynchronously
-      JobService.runLeadGeneration(job.id, sourceId, criteria, campaignId).catch(console.error);
+      // Run asynchronously (kept alive on Vercel serverless via waitUntil)
+      const jobPromise = JobService.runLeadGeneration(job.id, sourceId, criteria, campaignId).catch(console.error);
+      waitUntil(jobPromise);
 
       res.json({ success: true, data: job });
     } catch (error: any) {
@@ -841,7 +843,8 @@ export function createServerApp() {
       if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
       
       const { sourceId = 'osm', criteria, campaignId } = req.body;
-      JobService.resumeLeadGeneration(job.id, sourceId, criteria, campaignId).catch(console.error);
+      const resumePromise = JobService.resumeLeadGeneration(job.id, sourceId, criteria, campaignId).catch(console.error);
+      waitUntil(resumePromise);
       res.json({ success: true, message: 'Job resumed', data: job });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
@@ -862,7 +865,8 @@ export function createServerApp() {
       const user = await getOrCreateUser(req.user!.uid, req.user!.email!);
       const { rows, mapping, campaignId } = req.body;
       const job = await JobService.createJob(user.id, 'CSV_IMPORT', rows.length);
-      JobService.runCSVImport(job.id, rows, mapping, campaignId).catch(console.error);
+      const importPromise = JobService.runCSVImport(job.id, rows, mapping, campaignId).catch(console.error);
+      waitUntil(importPromise);
       res.json({ success: true, data: job });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });

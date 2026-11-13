@@ -131,8 +131,12 @@ export class JobService {
 
       let expansionTier = 1;
       const MAX_TIERS = 2;
+      const IS_VERCEL = Boolean(process.env.VERCEL);
+      const VERCEL_SAFE_BUDGET_MS = 45000;
+      const isOverBudget = () => IS_VERCEL && (Date.now() - startTime) >= VERCEL_SAFE_BUDGET_MS;
+      const bgTasks: Promise<any>[] = [];
 
-      while (totalSaved < targetCount && expansionTier <= MAX_TIERS) {
+      while (totalSaved < targetCount && expansionTier <= MAX_TIERS && !isOverBudget()) {
         if (expansionTier > 1 && currentMasterBbox) {
           results.currentStep = `Recherche en cours (${totalSaved}/${targetCount} prospects). Élargissement à la périphérie locale...`;
           await this.updateJobProgress(jobId, totalSaved, 'running', results);
@@ -148,7 +152,7 @@ export class JobService {
 
         // Phase 2. Controlled Cell Discovery
         for (let cellIdx = cellStartIdx; cellIdx < cells.length; cellIdx++) {
-          if (totalSaved >= targetCount) break;
+          if (totalSaved >= targetCount || isOverBudget()) break;
 
           const cell = cells[cellIdx];
           results.currentCell = `Zone ${cellIdx + 1}/${cells.length} (Niveau ${expansionTier})`;
@@ -184,7 +188,7 @@ export class JobService {
             // Process leads in concurrent batches of 12 for high-speed lead generation
             const BATCH_SIZE = 12;
             for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-              if (totalSaved >= targetCount) break;
+              if (totalSaved >= targetCount || isOverBudget()) break;
               const chunk = candidates.slice(i, i + BATCH_SIZE);
 
               const chunkPromises = chunk.map(async (rawLead) => {
@@ -211,14 +215,18 @@ export class JobService {
                     totalSaved++;
 
                     // Trigger opportunity analysis & website audit in background ONLY for qualified leads
-                    OpportunityService.analyzeLead(lead.id)
-                      .then(() => { results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1; })
-                      .catch(() => {});
+                    bgTasks.push(
+                      OpportunityService.analyzeLead(lead.id)
+                        .then(() => { results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1; })
+                        .catch(() => {})
+                    );
                     const activeWeb = enrichedState?.website || lead.website;
                     if (activeWeb && !ValidationService.isSocialOrDirectoryUrl(activeWeb)) {
-                      WebsiteService.performAudit(lead.id, activeWeb)
-                        .then(() => { results.auditsCompleted = (results.auditsCompleted || 0) + 1; })
-                        .catch(() => {});
+                      bgTasks.push(
+                        WebsiteService.performAudit(lead.id, activeWeb)
+                          .then(() => { results.auditsCompleted = (results.auditsCompleted || 0) + 1; })
+                          .catch(() => {})
+                      );
                     }
                     return lead;
                   } else {
@@ -254,7 +262,7 @@ export class JobService {
       }
 
       // Secondary Wave: Only if Overpass yielded sparse raw candidates
-      if (totalSaved < targetCount && results.totalFound < targetCount && (criteria.city || criteria.country) && criteria.category) {
+      if (totalSaved < targetCount && results.totalFound < targetCount && !isOverBudget() && (criteria.city || criteria.country) && criteria.category) {
         results.currentStep = `Vague complémentaire pour atteindre ${targetCount} prospects...`;
         await this.updateJobProgress(jobId, totalSaved, 'running', results);
 
@@ -265,7 +273,7 @@ export class JobService {
           
           const BATCH_SIZE = 12;
           for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-            if (totalSaved >= targetCount) break;
+            if (totalSaved >= targetCount || isOverBudget()) break;
             const chunk = candidates.slice(i, i + BATCH_SIZE);
 
             await Promise.allSettled(chunk.map(async (rawLead: any) => {
@@ -282,14 +290,18 @@ export class JobService {
                   results.newLeadsSaved++;
                   totalSaved++;
 
-                  OpportunityService.analyzeLead(lead.id)
-                    .then(() => { results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1; })
-                    .catch(() => {});
+                  bgTasks.push(
+                    OpportunityService.analyzeLead(lead.id)
+                      .then(() => { results.opportunitiesAnalyzed = (results.opportunitiesAnalyzed || 0) + 1; })
+                      .catch(() => {})
+                  );
                   const activeWeb = enrichedState?.website || lead.website;
                   if (activeWeb && !ValidationService.isSocialOrDirectoryUrl(activeWeb)) {
-                    WebsiteService.performAudit(lead.id, activeWeb)
-                      .then(() => { results.auditsCompleted = (results.auditsCompleted || 0) + 1; })
-                      .catch(() => {});
+                    bgTasks.push(
+                      WebsiteService.performAudit(lead.id, activeWeb)
+                        .then(() => { results.auditsCompleted = (results.auditsCompleted || 0) + 1; })
+                        .catch(() => {})
+                    );
                   }
                 } else {
                   await this.deleteUnmatchedLead(lead.id);
@@ -307,11 +319,23 @@ export class JobService {
         }
       }
 
+      // Wait briefly for in-flight opportunity/audit writes before serverless function exits
+      if (bgTasks.length > 0) {
+        await Promise.race([
+          Promise.allSettled(bgTasks),
+          new Promise((resolve) => setTimeout(resolve, 4000))
+        ]);
+      }
+
       // Complete
-      results.currentStep = `Terminé avec succès. ${results.validBusinesses} prospects qualifiés découverts.`;
+      const timedOutEarly = isOverBudget() && totalSaved < targetCount;
+      results.canResume = timedOutEarly;
+      results.currentStep = timedOutEarly
+        ? `Limite serverless atteinte : ${results.validBusinesses} prospects sauvegardés (vous pouvez cliquer sur Reprendre).`
+        : `Terminé avec succès. ${results.validBusinesses} prospects qualifiés découverts.`;
       results.currentCell = 'Terminé';
       await this.updateJobProgress(jobId, totalSaved, 'completed', results);
-      await metrics.record('JOB', 'LEAD_GEN', 'SUCCESS', Date.now() - startTime, { jobId, totalSaved });
+      await metrics.record('JOB', 'LEAD_GEN', 'SUCCESS', Date.now() - startTime, { jobId, totalSaved, timedOutEarly });
 
     } catch (error: any) {
       console.error('Job execution failed:', error);

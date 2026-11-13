@@ -1410,7 +1410,7 @@ function GenerateView({ token, setActiveTab }: any) {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {jobStatus.status === 'failed' && (
+                  {(jobStatus.status === 'failed' || results.canResume) && (
                     <button
                       onClick={handleResume}
                       disabled={resuming}
