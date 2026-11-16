@@ -1,8 +1,9 @@
-import { db } from '../db/index.ts';
+import { db, hasDbConfig } from '../db/index.ts';
 import { systemLogs, requestMetrics } from '../db/schema.ts';
 
 export const logger = {
   info: async (component: string, message: string, metadata?: any, source?: string, requestId?: string) => {
+    if (!hasDbConfig()) return;
     try {
       await db.insert(systemLogs).values({
         level: 'INFO',
@@ -17,6 +18,7 @@ export const logger = {
     }
   },
   warn: async (component: string, message: string, metadata?: any, source?: string, requestId?: string) => {
+    if (!hasDbConfig()) return;
     try {
       await db.insert(systemLogs).values({
         level: 'WARN',
@@ -31,6 +33,7 @@ export const logger = {
     }
   },
   error: async (component: string, message: string, error?: any, metadata?: any, source?: string, requestId?: string, retryCount?: number) => {
+    if (!hasDbConfig()) return;
     try {
       await db.insert(systemLogs).values({
         level: 'ERROR',
@@ -54,6 +57,7 @@ export const logger = {
 
 export const metrics = {
   record: async (category: 'SOURCE' | 'AUDIT' | 'AI' | 'JOB', source: string, status: 'SUCCESS' | 'FAILURE' | 'TIMEOUT' | 'RETRY_SUCCESS', durationMs?: number, metadata?: any, tokenCount?: number, estimatedCost?: number) => {
+    if (!hasDbConfig()) return;
     try {
       await db.insert(requestMetrics).values({
         category,

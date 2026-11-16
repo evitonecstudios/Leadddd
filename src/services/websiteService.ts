@@ -115,21 +115,12 @@ export class WebsiteService {
     return { status: 'not_detected' };
   }
 
-  static async performAudit(leadId: number, targetUrl: string) {
+  static async performAuditStateless(targetUrl: string) {
     const startTime = Date.now();
     if (!this.isSafeUrl(targetUrl)) {
-      await logger.warn('AUDIT', 'Blocked attempt to audit unsafe URL', { leadId, targetUrl }, 'WEBSITE_SCRAPER');
       throw new Error('Unsafe URL provided');
     }
 
-    const [auditRecord] = await db.insert(audits).values({
-      leadId,
-      targetUrl,
-      status: 'running',
-      metrics: {},
-    }).returning();
-
-    const auditId = auditRecord.id;
     const findings: AuditFinding[] = [];
     const auditMetrics: Record<string, any> = {};
     const permissiveAgent = new https.Agent({ 
@@ -144,17 +135,14 @@ export class WebsiteService {
       let sslIssueDetected = false;
       let sslIssueDetails = '';
 
-      // Manual redirect follow with safety checks
       while (redirects < 5) {
         if (!this.isSafeUrl(currentUrl)) {
-          await logger.warn('AUDIT', 'Blocked redirect to unsafe URL', { auditId, currentUrl }, 'WEBSITE_SCRAPER');
           throw new Error('Redirected to unsafe URL');
         }
         
         try {
-          // Standard request with reasonable 12s timeout
           const response = await axios.get(currentUrl, {
-            timeout: 12000,
+            timeout: 10000,
             headers: { 
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 LeadForge-Audit-Bot/2.0',
               'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -163,7 +151,7 @@ export class WebsiteService {
             },
             httpsAgent: sslIssueDetected ? permissiveAgent : undefined,
             maxRedirects: 0,
-            validateStatus: () => true // Allow all status codes (200, 301, 401, 403, 500)
+            validateStatus: () => true
           });
 
           if (response.status >= 300 && response.status < 400 && response.headers.location) {
@@ -182,35 +170,30 @@ export class WebsiteService {
                                  err.code === 'ERR_TLS_CERT_ALTNAME_INVALID' ||
                                  err.code === 'DEPTH_ZERO_SELF_SIGNED_CERT';
 
-          // If SSL certificate mismatch occurs (e.g. ets-gerard.com, www.schaefer-zuerich.ch), capture as critical security finding and retry with permissiveAgent
           if (isSslCertError) {
             sslIssueDetected = true;
             if (!sslIssueDetails) sslIssueDetails = err.message;
 
-            try {
-              const fallbackResponse = await axios.get(currentUrl, {
-                timeout: 12000,
-                headers: { 
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 LeadForge-Audit-Bot/2.0',
-                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                },
-                httpsAgent: permissiveAgent,
-                maxRedirects: 0,
-                validateStatus: () => true
-              });
+            const fallbackResponse = await axios.get(currentUrl, {
+              timeout: 10000,
+              headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 LeadForge-Audit-Bot/2.0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              },
+              httpsAgent: permissiveAgent,
+              maxRedirects: 0,
+              validateStatus: () => true
+            });
 
-              if (fallbackResponse.status >= 300 && fallbackResponse.status < 400 && fallbackResponse.headers.location) {
-                const nextUrl = new URL(fallbackResponse.headers.location, currentUrl).toString();
-                currentUrl = nextUrl;
-                redirects++;
-                continue;
-              }
-
-              finalResponse = fallbackResponse;
-              break;
-            } catch (fallbackErr: any) {
-              throw fallbackErr;
+            if (fallbackResponse.status >= 300 && fallbackResponse.status < 400 && fallbackResponse.headers.location) {
+              const nextUrl = new URL(fallbackResponse.headers.location, currentUrl).toString();
+              currentUrl = nextUrl;
+              redirects++;
+              continue;
             }
+
+            finalResponse = fallbackResponse;
+            break;
           } else {
             throw err;
           }
@@ -219,11 +202,9 @@ export class WebsiteService {
 
       if (!finalResponse) throw new Error('Too many redirects or no response');
 
-      const loadEndTime = Date.now();
-      const duration = loadEndTime - startTime;
+      const duration = Date.now() - startTime;
       const html = typeof finalResponse.data === 'string' ? finalResponse.data : '';
       
-      // Critical Check: Detect Parked / Expired / For-Sale Domain Broker pages
       if (IdentityService.isParkedOrBrokerDomain(html, currentUrl)) {
         findings.push({
           category: 'Technical',
@@ -235,9 +216,10 @@ export class WebsiteService {
           confidence: 'HIGH'
         });
 
-        await db.insert(auditFindings).values(findings.map(f => ({ auditId, ...f })));
-        await db.update(audits).set({
-          status: 'completed',
+        return {
+          status: 'completed' as const,
+          isParked: true,
+          targetUrl,
           finalUrl: currentUrl,
           overallScore: 0,
           technicalScore: 0,
@@ -246,16 +228,10 @@ export class WebsiteService {
           localSeoScore: 0,
           mobileScore: 0,
           performanceScore: 0,
-          completedAt: new Date()
-        }).where(eq(audits.id, auditId));
-
-        await db.update(leads).set({
-          websiteStatus: 'not_detected',
-          websiteExists: false,
-          auditScore: 0
-        }).where(eq(leads.id, leadId));
-
-        return { auditId, overallScore: 0 };
+          metrics: { status: finalResponse.status, isParked: true, ttfb: duration },
+          findings,
+          completedAt: new Date().toISOString()
+        };
       }
 
       const $ = cheerio.load(html || '<html><body></body></html>');
@@ -267,7 +243,6 @@ export class WebsiteService {
       auditMetrics.targetUrl = targetUrl;
       auditMetrics.headers = finalResponse.headers || {};
 
-      // 1. SSL/TLS Certificate Findings
       if (sslIssueDetected) {
         findings.push({
           category: 'Security',
@@ -280,7 +255,6 @@ export class WebsiteService {
         });
       }
 
-      // 2. HTTP Access / Restriction Findings
       if (finalResponse.status === 401) {
         findings.push({
           category: 'Technical',
@@ -313,29 +287,16 @@ export class WebsiteService {
         });
       }
 
-      // --- TECHNICAL AUDIT ---
       let techScore = this.auditTechnical($, finalResponse, findings, auditMetrics);
-      if (sslIssueDetected) {
-        techScore = Math.max(0, techScore - 40);
-      }
-      if (finalResponse.status >= 400) {
-        techScore = Math.max(0, techScore - 40);
-      }
+      if (sslIssueDetected) techScore = Math.max(0, techScore - 40);
+      if (finalResponse.status >= 400) techScore = Math.max(0, techScore - 40);
 
-      // --- SEO AUDIT ---
       const seoScore = this.auditSEO($, findings, auditMetrics);
-
-      // --- CONVERSION AUDIT ---
       const convScore = this.auditConversion($, html, findings, auditMetrics);
-
-      // --- LOCAL SEO ---
       const localSeoScore = this.auditLocalSEO($, findings, auditMetrics);
-
-      // --- MOBILE RESPONSIVENESS AUDIT ---
       const mobileScore = this.auditMobile($, html, findings);
       const perfScore = this.calculatePerformanceScore(duration, html.length);
 
-      // --- DETERMINISTIC SCORING ---
       const scores: Record<string, number | null> = {
         technical: techScore,
         seo: seoScore,
@@ -356,7 +317,6 @@ export class WebsiteService {
 
       let overallScore = 0;
       let totalWeight = 0;
-      
       Object.entries(scores).forEach(([key, val]) => {
         if (val !== null) {
           const weight = (weights as any)[key];
@@ -367,34 +327,22 @@ export class WebsiteService {
 
       const finalOverall = totalWeight > 0 ? Math.round(overallScore / totalWeight) : null;
 
-      // --- PERSIST FINDINGS ---
-      if (findings.length > 0) {
-        await db.insert(auditFindings).values(findings.map(f => ({
-          auditId,
-          ...f
-        })));
-      }
-
-      // --- UPDATE AUDIT RECORD ---
-      await db.update(audits).set({
-        status: 'completed',
+      return {
+        status: 'completed' as const,
+        isParked: false,
+        targetUrl,
         finalUrl: auditMetrics.finalUrl,
         overallScore: finalOverall,
         technicalScore: techScore,
-        seoScore: seoScore,
+        seoScore,
         conversionScore: convScore,
-        localSeoScore: localSeoScore,
-        mobileScore: mobileScore,
+        localSeoScore,
+        mobileScore,
         performanceScore: perfScore,
         metrics: auditMetrics,
-        completedAt: new Date()
-      }).where(eq(audits.id, auditId));
-
-      await db.update(leads).set({ auditScore: finalOverall }).where(eq(leads.id, leadId));
-
-      await metrics.record('AUDIT', 'WEBSITE', 'SUCCESS', Date.now() - startTime, { leadId, auditId, score: finalOverall });
-      return { auditId, overallScore: finalOverall };
-
+        findings,
+        completedAt: new Date().toISOString()
+      };
     } catch (error: any) {
       const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
       const isNetworkIssue = error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED' || error.code === 'EHOSTUNREACH';
@@ -403,7 +351,6 @@ export class WebsiteService {
                              error.message?.includes('altnames') ||
                              error.code === 'ERR_TLS_CERT_ALTNAME_INVALID';
 
-      // Transform fatal network timeouts, DNS failures, and SSL altname errors into completed audits with critical findings
       if (isTimeout || isNetworkIssue || isSslCertError) {
         if (isSslCertError) {
           findings.push({
@@ -419,9 +366,9 @@ export class WebsiteService {
           findings.push({
             category: 'Performance',
             severity: 'CRITICAL',
-            title: 'Délai d’attente serveur dépassé (>12s)',
-            description: 'Le serveur web n’a pas répondu dans le délai imparti de 12 secondes.',
-            evidence: error.message || 'Request timed out after 12000ms',
+            title: 'Délai d’attente serveur dépassé (>10s)',
+            description: 'Le serveur web n’a pas répondu dans le délai imparti.',
+            evidence: error.message || 'Request timed out',
             recommendation: 'Migrer vers un hébergement web performant avec mise en cache CDN.',
             confidence: 'HIGH'
           });
@@ -437,15 +384,10 @@ export class WebsiteService {
           });
         }
 
-        if (findings.length > 0) {
-          await db.insert(auditFindings).values(findings.map(f => ({
-            auditId,
-            ...f
-          })));
-        }
-
-        const fallbackScores = {
-          status: 'completed',
+        return {
+          status: 'completed' as const,
+          isParked: false,
+          targetUrl,
           finalUrl: targetUrl,
           overallScore: isSslCertError ? 25 : 20,
           technicalScore: isSslCertError ? 10 : (isTimeout ? 40 : 15),
@@ -454,16 +396,69 @@ export class WebsiteService {
           localSeoScore: null,
           mobileScore: null,
           performanceScore: isTimeout ? 10 : 0,
-          metrics: { status: isSslCertError ? 526 : (isTimeout ? 504 : 503), error: error.message, ttfb: isTimeout ? 12000 : 0 },
-          completedAt: new Date()
+          metrics: { status: isSslCertError ? 526 : (isTimeout ? 504 : 503), error: error.message, ttfb: isTimeout ? 10000 : 0 },
+          findings,
+          completedAt: new Date().toISOString()
         };
-
-        await db.update(audits).set(fallbackScores).where(eq(audits.id, auditId));
-        await db.update(leads).set({ auditScore: fallbackScores.overallScore }).where(eq(leads.id, leadId));
-        await metrics.record('AUDIT', 'WEBSITE', isTimeout ? 'TIMEOUT' : 'FAILURE', Date.now() - startTime, { leadId, auditId, error: error.message, isSslCertError });
-        return { auditId, overallScore: fallbackScores.overallScore };
       }
 
+      throw error;
+    }
+  }
+
+  static async performAudit(leadId: number, targetUrl: string) {
+    const startTime = Date.now();
+    if (!this.isSafeUrl(targetUrl)) {
+      await logger.warn('AUDIT', 'Blocked attempt to audit unsafe URL', { leadId, targetUrl }, 'WEBSITE_SCRAPER');
+      throw new Error('Unsafe URL provided');
+    }
+
+    const [auditRecord] = await db.insert(audits).values({
+      leadId,
+      targetUrl,
+      status: 'running',
+      metrics: {},
+    }).returning();
+
+    const auditId = auditRecord.id;
+
+    try {
+      const result = await this.performAuditStateless(targetUrl);
+
+      if (result.findings.length > 0) {
+        await db.insert(auditFindings).values(result.findings.map(f => ({
+          auditId,
+          ...f
+        })));
+      }
+
+      await db.update(audits).set({
+        status: 'completed',
+        finalUrl: result.finalUrl,
+        overallScore: result.overallScore,
+        technicalScore: result.technicalScore,
+        seoScore: result.seoScore,
+        conversionScore: result.conversionScore,
+        localSeoScore: result.localSeoScore,
+        mobileScore: result.mobileScore,
+        performanceScore: result.performanceScore,
+        metrics: result.metrics,
+        completedAt: new Date()
+      }).where(eq(audits.id, auditId));
+
+      if (result.isParked) {
+        await db.update(leads).set({
+          websiteStatus: 'not_detected',
+          websiteExists: false,
+          auditScore: 0
+        }).where(eq(leads.id, leadId));
+      } else {
+        await db.update(leads).set({ auditScore: result.overallScore }).where(eq(leads.id, leadId));
+      }
+
+      await metrics.record('AUDIT', 'WEBSITE', 'SUCCESS', Date.now() - startTime, { leadId, auditId, score: result.overallScore });
+      return { auditId, overallScore: result.overallScore };
+    } catch (error: any) {
       await metrics.record('AUDIT', 'WEBSITE', 'FAILURE', Date.now() - startTime, { leadId, auditId, error: error.message });
       await logger.error('AUDIT', `Audit failed for ${targetUrl}`, error, { leadId, auditId }, 'WEBSITE_SCRAPER');
       

@@ -91,7 +91,16 @@ export class NormalizationService {
     const hasEmail = Boolean(data.email && ValidationService.validateEmail(data.email));
     const hasAddress = Boolean(data.address && data.address.trim().length >= 6);
     const hasLegalOrSocial = Boolean(
-      (data.notes && (data.notes.includes('SIRET') || data.notes.includes('Dirigeant') || data.notes.includes('WhatsApp'))) ||
+      (data.notes && (
+        data.notes.includes('SIRET') ||
+        data.notes.includes('Legal ID') ||
+        data.notes.includes('Dirigeant') ||
+        data.notes.includes('WhatsApp') ||
+        data.notes.includes('Facebook:') ||
+        data.notes.includes('Instagram:') ||
+        data.notes.includes('LinkedIn:') ||
+        data.notes.includes('Hours:')
+      )) ||
       (data.rawData?.socialLinks && Object.values(data.rawData.socialLinks).some(Boolean))
     );
 

@@ -1,4 +1,5 @@
-import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
+import { AuthProvider, useAuth, isLocalWorkspaceActive } from './contexts/AuthContext.tsx';
+import { LocalWorkspaceStore } from './lib/localWorkspace.ts';
 import { auth } from './lib/firebase.ts';
 import { 
   Search, LayoutDashboard, Database, Settings, LogOut, BarChart3, Target, Filter, 
@@ -62,8 +63,19 @@ const getValidToken = async (fallbackToken?: string, forceRefresh = false): Prom
   return fallbackToken || '';
 };
 
+const shouldUseLocalStore = (url: string) =>
+  isLocalWorkspaceActive() &&
+  url.startsWith('/api/') &&
+  !url.startsWith('/api/health') &&
+  !url.startsWith('/api/debug/') &&
+  !url.startsWith('/api/search-providers') &&
+  !url.startsWith('/api/stateless/');
+
 const api = {
   get: async (url: string, token: string, retries = 3): Promise<any> => {
+    if (shouldUseLocalStore(url)) {
+      return LocalWorkspaceStore.handleRequest('GET', url);
+    }
     try {
       const activeToken = await getValidToken(token);
       const res = await fetch(url, { headers: { Authorization: `Bearer ${activeToken}` } });
@@ -92,6 +104,9 @@ const api = {
     }
   },
   post: async (url: string, data: any, token: string, retries = 3): Promise<any> => {
+    if (shouldUseLocalStore(url)) {
+      return LocalWorkspaceStore.handleRequest('POST', url, data);
+    }
     try {
       const activeToken = await getValidToken(token);
       const res = await fetch(url, {
@@ -123,6 +138,9 @@ const api = {
     }
   },
   patch: async (url: string, data: any, token: string, retries = 3): Promise<any> => {
+    if (shouldUseLocalStore(url)) {
+      return LocalWorkspaceStore.handleRequest('PATCH', url, data);
+    }
     try {
       const activeToken = await getValidToken(token);
       const res = await fetch(url, {
@@ -154,6 +172,9 @@ const api = {
     }
   },
   delete: async (url: string, token: string, retries = 3): Promise<any> => {
+    if (shouldUseLocalStore(url)) {
+      return LocalWorkspaceStore.handleRequest('DELETE', url);
+    }
     try {
       const activeToken = await getValidToken(token);
       const res = await fetch(url, {
@@ -219,7 +240,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 function AppContent() {
   console.log("AppContent rendering...");
-  const { user, token: authContextToken, loading, authError, authErrorCode, signIn, logout } = useAuth();
+  const { user, token: authContextToken, loading, authError, authErrorCode, isLocalWorkspace, enterLocalWorkspace, signIn, logout } = useAuth();
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -348,9 +369,14 @@ function AppContent() {
             );
           })()}
 
-          <button onClick={signIn} className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98]">
-            Se connecter avec Google
-          </button>
+          <div className="space-y-3">
+            <button onClick={signIn} className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98]">
+              Se connecter avec Google
+            </button>
+            <button onClick={enterLocalWorkspace} className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-slate-100 text-slate-800 rounded-xl text-sm font-semibold hover:bg-slate-200 transition-all border border-slate-200">
+              Démarrer sans configuration (Mode Autonome)
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -381,6 +407,7 @@ function AppContent() {
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+          isLocalWorkspace={isLocalWorkspace}
         />
         <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full flex-1">
           {selectedLeadId ? (
@@ -475,7 +502,13 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
 
         <div className="p-4 border-t border-slate-100 space-y-3 bg-slate-50/50">
           <div className="flex items-center gap-3 px-1">
-            <img src={user.photoURL || ''} alt="" className="w-8 h-8 rounded-full border border-slate-200 shrink-0" />
+            {user.photoURL ? (
+              <img src={user.photoURL} alt="" className="w-8 h-8 rounded-full border border-slate-200 shrink-0" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                {(user.displayName || 'L')[0].toUpperCase()}
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <p className="text-xs font-bold text-slate-900 truncate uppercase tracking-wider">{user.displayName}</p>
               <p className="text-[10px] text-slate-400 truncate">{user.email}</p>
@@ -552,7 +585,13 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
 
         <div className="p-4 border-t border-slate-200 space-y-3">
           <div className={cn("flex items-center", collapsed ? "justify-center" : "gap-3 px-1")}>
-            <img src={user.photoURL || ''} alt="" className="w-8 h-8 rounded-full border border-slate-200 shrink-0" />
+            {user.photoURL ? (
+              <img src={user.photoURL} alt="" className="w-8 h-8 rounded-full border border-slate-200 shrink-0" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                {(user.displayName || 'L')[0].toUpperCase()}
+              </div>
+            )}
             {!collapsed && (
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-bold text-slate-900 truncate uppercase tracking-wider">{user.displayName}</p>
@@ -577,7 +616,7 @@ function Sidebar({ activeTab, setActiveTab, user, logout, mobileOpen, onCloseMob
   );
 }
 
-function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: any) {
+function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse, isLocalWorkspace }: any) {
   const titles: Record<string, string> = {
     'dashboard': 'Tableau de bord CRM & Opportunités',
     'generate': 'Prospection & Découverte B2B',
@@ -619,6 +658,12 @@ function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: an
       </div>
 
       <div className="flex items-center gap-3">
+        {isLocalWorkspace && (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-[10px] font-bold uppercase tracking-wider" title="Aucune base de données requise : vos prospects sont sauvegardés localement dans votre navigateur.">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            Mode Autonome
+          </div>
+        )}
         <div className="relative hidden md:block">
           <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input 
@@ -633,6 +678,7 @@ function Header({ activeTab, onOpenMobileMenu, collapsed, onToggleCollapse }: an
 }
 
 function DashboardView({ setActiveTab, onSelectLead, token }: any) {
+  const { enterLocalWorkspace } = useAuth();
   const [stats, setStats] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -842,6 +888,15 @@ function DashboardView({ setActiveTab, onSelectLead, token }: any) {
         )}
 
         <div className="pt-2 flex flex-wrap gap-2 justify-center">
+          <button 
+            onClick={() => {
+              enterLocalWorkspace();
+              setError(null);
+            }} 
+            className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-emerald-500 transition-colors shadow-sm"
+          >
+            Continuer sans base de données (Mode Autonome)
+          </button>
           <button 
             onClick={() => window.location.reload()} 
             className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-colors shadow-sm"
@@ -2005,6 +2060,10 @@ function LeadsView({ token, onSelectLead }: any) {
 
   const handleExport = () => {
     const params = getQueryParams(true);
+    if (isLocalWorkspaceActive()) {
+      void LocalWorkspaceStore.exportCsv(params.toString());
+      return;
+    }
     const a = document.createElement('a');
     a.href = `/api/leads/export?token=${token}&${params.toString()}`;
     a.download = `leadforge-prospects-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -4446,6 +4505,7 @@ function EvidenceTab({ lead }: { lead: any }) {
 }
 
 function SettingsView({ token }: { token: string }) {
+  const { isLocalWorkspace, backendMode, exitLocalWorkspace } = useAuth();
   const [providerStatus, setProviderStatus] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -4469,7 +4529,41 @@ function SettingsView({ token }: { token: string }) {
     <div className="max-w-4xl space-y-8 animate-in fade-in duration-300">
       <div>
         <h3 className="text-xl font-bold text-slate-900">Configuration du Pipeline & Sources</h3>
-        <p className="text-xs text-slate-500">Vue d'ensemble transparente des sources de détection LeadForge, infrastructure $0 MVP et adaptateurs de recherche.</p>
+        <p className="text-xs text-slate-500">Vue d'ensemble transparente des sources de détection LeadForge, stockage et adaptateurs de recherche.</p>
+      </div>
+
+      {/* Mode de Stockage & Déploiement */}
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-bold text-slate-900">
+              {isLocalWorkspace ? 'Mode Autonome Sans Configuration (Vercel Ready)' : 'Mode Équipe Cloud (PostgreSQL + Auth)'}
+            </h4>
+            <span className={cn(
+              "px-2 py-0.5 text-[10px] font-bold uppercase rounded",
+              isLocalWorkspace ? "bg-indigo-50 text-indigo-700 border border-indigo-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+            )}>
+              {isLocalWorkspace ? 'IndexedDB Local' : 'PostgreSQL Connecté'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-500">
+            {isLocalWorkspace
+              ? "La découverte, le scraping (Scrapling) et l'audit tournent sur les fonctions stateless du serveur, et vos prospects sont sauvegardés dans votre navigateur (IndexedDB) sans aucune variable d'environnement requise."
+              : "Vos campagnes et prospects sont synchronisés sur votre base PostgreSQL avec authentification utilisateur."}
+          </p>
+        </div>
+        {isLocalWorkspace && (
+          <div className="flex items-center gap-2 shrink-0">
+            {backendMode === 'postgres' && (
+              <button
+                onClick={exitLocalWorkspace}
+                className="px-3 py-2 text-xs font-bold bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-colors"
+              >
+                Passer en Mode Cloud
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* $0 Free MVP Architecture */}

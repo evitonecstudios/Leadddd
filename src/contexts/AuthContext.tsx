@@ -2,13 +2,47 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, onIdTokenChanged, User, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 
+export type BackendMode = 'loading' | 'postgres' | 'zero_config' | 'db_error';
+
+const LOCAL_OVERRIDE_KEY = 'leadforge_local_workspace_override';
+
+let _useLocalWorkspace = false;
+export const isLocalWorkspaceActive = () => _useLocalWorkspace;
+export const setLocalWorkspaceActive = (val: boolean) => {
+  _useLocalWorkspace = val;
+};
+
+const createLocalUser = (): User => ({
+  uid: 'local-workspace-user',
+  email: 'local@leadforge.app',
+  displayName: 'Espace Autonome',
+  photoURL: null,
+  emailVerified: true,
+  isAnonymous: false,
+  metadata: {} as any,
+  providerData: [],
+  refreshToken: '',
+  tenantId: null,
+  delete: async () => {},
+  getIdToken: async () => 'local-workspace-token',
+  getIdTokenResult: async () => ({} as any),
+  reload: async () => {},
+  toJSON: () => ({}),
+  phoneNumber: null,
+  providerId: 'local'
+});
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
   authError: string | null;
   authErrorCode: string | null;
+  backendMode: BackendMode;
+  isLocalWorkspace: boolean;
   signIn: () => Promise<void>;
+  enterLocalWorkspace: () => void;
+  exitLocalWorkspace: () => void;
   logout: () => Promise<void>;
   getToken: (forceRefresh?: boolean) => Promise<string | null>;
 }
@@ -21,13 +55,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
+  const [backendMode, setBackendMode] = useState<BackendMode>('loading');
+  const [isLocalWorkspace, setIsLocalWorkspace] = useState(false);
+
+  const activateLocalWorkspace = (persistOverride = false) => {
+    if (persistOverride && typeof localStorage !== 'undefined') {
+      localStorage.setItem(LOCAL_OVERRIDE_KEY, '1');
+    }
+    setLocalWorkspaceActive(true);
+    setIsLocalWorkspace(true);
+    if (!auth.currentUser) {
+      setUser(createLocalUser());
+      setToken('local-workspace-token');
+    }
+  };
 
   useEffect(() => {
-    console.log('[AUTH] Setting up onAuthStateChanged and onIdTokenChanged listeners');
+    let mounted = true;
+    let firebaseResolved = false;
+
+    const init = async () => {
+      let detectedMode: BackendMode = 'postgres';
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+          const health = await res.json();
+          if (health.mode === 'zero_config') detectedMode = 'zero_config';
+          else if (health.mode === 'db_error') detectedMode = 'db_error';
+          else detectedMode = 'postgres';
+        }
+      } catch {
+        // Ignore network error; rely on default
+      }
+
+      if (!mounted) return;
+      setBackendMode(detectedMode);
+
+      const hasOverride = typeof localStorage !== 'undefined' && localStorage.getItem(LOCAL_OVERRIDE_KEY) === '1';
+
+      // Zero-Config Mode: No DATABASE_URL configured -> use IndexedDB + Stateless Serverless automatically!
+      if (detectedMode === 'zero_config' || hasOverride) {
+        setLocalWorkspaceActive(true);
+        setIsLocalWorkspace(true);
+        if (!auth.currentUser) {
+          setUser(createLocalUser());
+          setToken('local-workspace-token');
+        }
+        if (firebaseResolved) setLoading(false);
+      }
+    };
+
+    const healthPromise = init();
+
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
-      console.log('[AUTH] State changed:', currentUser ? `User: ${currentUser.email} (${currentUser.uid})` : 'No user');
-      setUser(currentUser);
+      firebaseResolved = true;
+      await healthPromise;
+      if (!mounted) return;
+
       if (currentUser) {
+        setUser(currentUser);
         try {
           const t = await currentUser.getIdToken();
           setToken(t);
@@ -35,80 +121,112 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           console.error('[AUTH] Failed to get initial token:', e);
         }
       } else {
-        setToken(null);
+        const hasOverride = typeof localStorage !== 'undefined' && localStorage.getItem(LOCAL_OVERRIDE_KEY) === '1';
+        if (isLocalWorkspaceActive() || hasOverride) {
+          setUser(createLocalUser());
+          setToken('local-workspace-token');
+        } else {
+          setUser(null);
+          setToken(null);
+        }
       }
       setLoading(false);
     });
 
-    // Listen for token refresh events (every 50-60 min automatically handled by Firebase)
     const unsubscribeToken = onIdTokenChanged(auth, async (currentUser) => {
       if (currentUser) {
         try {
           const t = await currentUser.getIdToken();
           setToken(t);
-        } catch (e) {
-          console.error('[AUTH] Failed to refresh token:', e);
-        }
-      } else {
-        setToken(null);
+        } catch {}
       }
     });
 
     return () => {
+      mounted = false;
       unsubscribeAuth();
       unsubscribeToken();
     };
   }, []);
 
   const getToken = async (forceRefresh = false): Promise<string | null> => {
-    if (!auth.currentUser) return null;
+    if (!auth.currentUser) {
+      return isLocalWorkspaceActive() ? 'local-workspace-token' : null;
+    }
     try {
       const freshToken = await auth.currentUser.getIdToken(forceRefresh);
       setToken(freshToken);
       return freshToken;
-    } catch (e) {
-      console.error('[AUTH] Error refreshing token:', e);
+    } catch {
       return token;
     }
   };
 
   const signIn = async () => {
-    console.log('[AUTH] signIn called');
     setAuthError(null);
     setAuthErrorCode(null);
     try {
-      console.log('[AUTH] Calling signInWithPopup');
       const result = await signInWithPopup(auth, googleAuthProvider);
-      console.log('[AUTH] signInWithPopup success:', result.user.email);
       const t = await result.user.getIdToken();
       setToken(t);
+      setUser(result.user);
     } catch (error: any) {
       console.error('[AUTH] Sign in failed:', error);
       setAuthError(error.message);
       setAuthErrorCode(error.code || null);
-      if (error.code === 'auth/popup-blocked') {
-        console.warn('[AUTH] Popup was blocked by the browser');
-      } else if (error.code === 'auth/cancelled-popup-request') {
-        console.warn('[AUTH] Popup request was cancelled');
-      } else if (error.code === 'auth/popup-closed-by-user') {
-        console.warn('[AUTH] Popup was closed by the user');
-      }
+    }
+  };
+
+  const enterLocalWorkspace = () => {
+    setAuthError(null);
+    setAuthErrorCode(null);
+    activateLocalWorkspace(true);
+  };
+
+  const exitLocalWorkspace = () => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(LOCAL_OVERRIDE_KEY);
+    }
+    setLocalWorkspaceActive(false);
+    setIsLocalWorkspace(false);
+    if (!auth.currentUser) {
+      setUser(null);
+      setToken(null);
     }
   };
 
   const logout = async () => {
-    console.log('[AUTH] logout called');
     try {
-      await signOut(auth);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(LOCAL_OVERRIDE_KEY);
+      }
+      setLocalWorkspaceActive(false);
+      setIsLocalWorkspace(false);
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
+      setUser(null);
       setToken(null);
-      console.log('[AUTH] signOut success');
     } catch (error) {
       console.error('[AUTH] Logout failed:', error);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, authError, authErrorCode, signIn, logout, getToken }}>
+    <AuthContext.Provider value={{
+      user,
+      token,
+      loading,
+      authError,
+      authErrorCode,
+      backendMode,
+      isLocalWorkspace,
+      signIn,
+      enterLocalWorkspace,
+      exitLocalWorkspace,
+      logout,
+      getToken
+    }}>
       {children}
     </AuthContext.Provider>
   );

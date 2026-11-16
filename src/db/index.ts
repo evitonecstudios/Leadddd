@@ -46,17 +46,35 @@ export const getConnectionString = (): string | undefined => {
   return sanitizePostgresUrl(raw);
 };
 
+export const getDbConfigError = (): string | null => {
+  if (process.env.SQL_HOST || process.env.POSTGRES_HOST) return null;
+  const connString = getConnectionString();
+  if (!connString) {
+    return 'DATABASE_URL environment variable is not defined in this runtime.';
+  }
+  if (/^https?:\/\//i.test(connString)) {
+    return 'DATABASE_URL contient une URL HTTPS (URL de projet Supabase) au lieu de la chaîne URI PostgreSQL (postgresql://...).';
+  }
+  if (!/^postgres(?:ql)?:\/\//i.test(connString)) {
+    return 'DATABASE_URL invalide : la valeur doit commencer par postgresql:// ou postgres://.';
+  }
+  if (!connString.includes('@')) {
+    return 'DATABASE_URL format is invalid (missing user:password@host).';
+  }
+  const match = connString.match(/@([^:/?#]+)(?::(\d+))?/);
+  if (!match?.[1]) {
+    return 'DATABASE_URL format is invalid (missing host after @).';
+  }
+  return null;
+};
+
 export const hasDbConfig = (): boolean => {
-  return Boolean(
-    getConnectionString() ||
-      process.env.SQL_HOST ||
-      process.env.POSTGRES_HOST
-  );
+  return getDbConfigError() === null;
 };
 
 const getPoolSignature = (): string => {
   const conn = getConnectionString();
-  if (conn) return `url:${conn}`;
+  if (conn && !getDbConfigError()) return `url:${conn}`;
   if (process.env.SQL_HOST) return `sql:${process.env.SQL_HOST}:${process.env.SQL_DB_NAME || ''}`;
   if (process.env.POSTGRES_HOST) return `pg:${process.env.POSTGRES_HOST}:${process.env.POSTGRES_DATABASE || ''}`;
   return 'unconfigured';
@@ -92,7 +110,7 @@ export const createPool = () => {
       });
     } else {
       const connString = getConnectionString();
-      if (connString) {
+      if (connString && !getDbConfigError()) {
         const isLocal = connString.includes('localhost') || connString.includes('127.0.0.1');
         global._postgresPool = new Pool({
           connectionString: connString,
@@ -123,10 +141,11 @@ createPool();
 export const db = drizzle(global._postgresPool!, { schema: fullSchema });
 
 export async function initDatabaseSchema() {
-  if (!hasDbConfig()) {
+  const cfgError = getDbConfigError();
+  if (cfgError) {
     return {
       success: false,
-      error: 'DATABASE_URL environment variable is not configured in this environment.',
+      error: cfgError,
     };
   }
   const p = createPool();
@@ -143,6 +162,7 @@ export async function initDatabaseSchema() {
 export async function checkDbHealth() {
   const connString = getConnectionString();
   const explicitHost = process.env.SQL_HOST || process.env.POSTGRES_HOST;
+  const cfgError = getDbConfigError();
 
   let hostInfo = explicitHost || '(non configuré)';
   let portInfo = '5432';
@@ -156,7 +176,9 @@ export async function checkDbHealth() {
         hostInfo = match[1];
         portInfo = match[2] || '5432';
       } else {
-        hostInfo = '(URL invalide — @ manquant)';
+        hostInfo = /^https?:\/\//i.test(connString)
+          ? '(URL HTTPS collée au lieu de postgresql://)'
+          : '(URL invalide — @ manquant)';
       }
       isSupabasePooler = hostInfo.includes('pooler.supabase.com') || portInfo === '6543';
       isDirectSupabase = hostInfo.includes('supabase.co') && portInfo === '5432';
@@ -180,19 +202,16 @@ export async function checkDbHealth() {
     }
   };
 
-  if (!connString && !explicitHost) {
-    result.error = 'DATABASE_URL environment variable is not defined in this runtime.';
-    result.code = 'NO_DATABASE_URL';
-    result.diagnostics.recommendation = process.env.VERCEL
-      ? 'Dans Vercel -> Settings -> Environment Variables, ajoutez DATABASE_URL (URI du Transaction Pooler Supabase, port 6543) pour Production/Preview/Development, puis cliquez sur Deployments -> Redeploy.'
-      : 'La variable DATABASE_URL est absente de cet environnement. Ajoutez DATABASE_URL (URI du Transaction Pooler Supabase, port 6543) dans les variables/Secrets de votre déploiement puis redémarrez.';
-    return result;
-  }
-
-  if (connString && hostInfo.startsWith('(URL invalide')) {
-    result.error = 'DATABASE_URL format is invalid (missing user:password@host).';
-    result.code = 'INVALID_DATABASE_URL';
-    result.diagnostics.recommendation = 'Vérifiez le format de DATABASE_URL : postgresql://postgres.<ref>:<mot_de_passe>@aws-0-<region>.pooler.supabase.com:6543/postgres';
+  if (cfgError) {
+    result.error = cfgError;
+    result.code = (!connString && !explicitHost) ? 'NO_DATABASE_URL' : 'INVALID_DATABASE_URL';
+    if (result.code === 'NO_DATABASE_URL') {
+      result.diagnostics.recommendation = process.env.VERCEL
+        ? 'Dans Vercel -> Settings -> Environment Variables, ajoutez DATABASE_URL (URI du Transaction Pooler Supabase, port 6543) pour Production/Preview/Development, puis cliquez sur Deployments -> Redeploy.'
+        : 'La variable DATABASE_URL est absente de cet environnement. Ajoutez DATABASE_URL (URI du Transaction Pooler Supabase, port 6543) dans les variables/Secrets de votre déploiement puis redémarrez.';
+    } else {
+      result.diagnostics.recommendation = 'Dans Supabase -> bouton "Connect" (en haut) -> onglet "Connection string" -> Method: "Transaction pooler" -> copiez la chaîne complète : postgresql://postgres.<ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:6543/postgres, remplacez [YOUR-PASSWORD] par votre mot de passe DB, collez-la dans Vercel -> Settings -> Environment Variables (DATABASE_URL), puis cliquez sur Deployments -> Redeploy.';
+    }
     return result;
   }
 

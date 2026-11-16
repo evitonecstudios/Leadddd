@@ -104,10 +104,43 @@ export class EnrichmentBot {
           });
         }
 
+        if (scData.address) {
+          data.address = scData.address;
+          data.evidence.push({
+            field: 'address',
+            value: scData.address,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.openingHours) {
+          data.openingHours = scData.openingHours;
+          data.evidence.push({
+            field: 'opening_hours',
+            value: scData.openingHours,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
+        if (scData.legal?.legalName) {
+          data.legalName = scData.legal.legalName;
+          data.evidence.push({
+            field: 'legal_name',
+            value: scData.legal.legalName,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
+        }
+
         if (scData.legal?.siret) {
           data.siretOrVat = scData.legal.siret;
           data.evidence.push({
-            field: 'siret',
+            field: 'legal_id',
             value: scData.legal.siret,
             url: scData.finalUrl || url,
             method: 'SCRAPLING_STEALTH_CRAWL',
@@ -126,8 +159,18 @@ export class EnrichmentBot {
           });
         }
 
-        if (scData.title) {
-          data.tagline = scData.title;
+        const bestTagline = (scData.metaDescription && scData.metaDescription.trim().length > 15)
+          ? scData.metaDescription.trim()
+          : (scData.title && scData.title.trim().length > 5 ? scData.title.trim() : '');
+        if (bestTagline) {
+          data.tagline = bestTagline.slice(0, 220);
+          data.evidence.push({
+            field: 'tagline',
+            value: data.tagline,
+            url: scData.finalUrl || url,
+            method: 'SCRAPLING_STEALTH_CRAWL',
+            confidence: 'HIGH'
+          });
         }
 
         // Return immediately with Scrapling's high-fidelity extracted data

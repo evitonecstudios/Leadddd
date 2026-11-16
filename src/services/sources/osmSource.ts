@@ -181,6 +181,11 @@ export class OSMSource implements LeadSource {
                          tags['contact:mobile'] || tags['telephone'] || tags['contact:telephone'] || tags.tel;
         const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : undefined;
 
+        const rawWa = tags['contact:whatsapp'] || tags.whatsapp;
+        const whatsapp = rawWa && (ValidationService.validatePhone(String(rawWa)) || String(rawWa).toLowerCase().includes('wa.me'))
+          ? String(rawWa).trim()
+          : undefined;
+
         const rawWebCandidate = tags.website || tags['contact:website'] || tags.url || tags['contact:url'] || 
                                 tags['contact:web'] || tags['website:official'] || tags['website:menu'];
 
@@ -188,6 +193,10 @@ export class OSMSource implements LeadSource {
         const normalizedInsta = SocialEnrichmentService.normalizeInstagramUrl(tags['contact:instagram'] || tags.instagram || (rawWebCandidate?.includes('instagram.com') ? rawWebCandidate : undefined));
         const normalizedLi = SocialEnrichmentService.normalizeLinkedInUrl(tags['contact:linkedin'] || tags.linkedin || (rawWebCandidate?.includes('linkedin.com') ? rawWebCandidate : undefined));
         const normalizedTw = SocialEnrichmentService.normalizeTwitterUrl(tags['contact:twitter'] || tags.twitter || (rawWebCandidate?.includes('twitter.com') || rawWebCandidate?.includes('x.com') ? rawWebCandidate : undefined));
+        const rawYt = tags['contact:youtube'] || tags.youtube;
+        const normalizedYt = rawYt && (String(rawYt).includes('youtube.com') || String(rawYt).includes('youtu.be')) ? String(rawYt).trim() : undefined;
+        const rawTt = tags['contact:tiktok'] || tags.tiktok;
+        const normalizedTt = rawTt && String(rawTt).includes('tiktok.com') ? String(rawTt).trim() : undefined;
 
         // Official website: ONLY genuine website, never social profile or directory
         let cleanOfficialWebsite: string | undefined = undefined;
@@ -203,7 +212,7 @@ export class OSMSource implements LeadSource {
           continue;
         }
 
-        const hasDirectContact = Boolean(phone || cleanOfficialWebsite || email || normalizedFb || normalizedInsta);
+        const hasDirectContact = Boolean(phone || whatsapp || cleanOfficialWebsite || email || normalizedFb || normalizedInsta);
         const hasPhysicalPresence = Boolean((address && address.length >= 3) || (lat && lon));
         // Actionable businesses: must have either direct contact channels or verified physical establishment
         if (!hasDirectContact && !hasPhysicalPresence) {
@@ -215,6 +224,8 @@ export class OSMSource implements LeadSource {
         if (normalizedInsta) validSocialLinks.instagram = normalizedInsta;
         if (normalizedLi) validSocialLinks.linkedin = normalizedLi;
         if (normalizedTw) validSocialLinks.twitter = normalizedTw;
+        if (normalizedYt) validSocialLinks.youtube = normalizedYt;
+        if (normalizedTt) validSocialLinks.tiktok = normalizedTt;
 
         const resolvedCity = tags['addr:city'] || tags['addr:town'] || tags['addr:village'] || city;
         results.push({
@@ -227,6 +238,7 @@ export class OSMSource implements LeadSource {
           city: resolvedCity,
           address: address || (resolvedCity ? `${resolvedCity}${country ? `, ${country}` : ''}` : undefined),
           phone: phone,
+          whatsapp: whatsapp,
           website: cleanOfficialWebsite,
           email: email,
           latitude: lat,
@@ -235,6 +247,8 @@ export class OSMSource implements LeadSource {
             ...el, 
             chainsExcludedCount,
             openingHours,
+            operator: tags.operator,
+            description: tags.description,
             socialLinks: validSocialLinks
           }
         });
@@ -301,8 +315,12 @@ export class OSMSource implements LeadSource {
           const resolvedCity = addr.city || addr.town || addr.village || city;
           const address = [street, addr.postcode, resolvedCity].filter(Boolean).join(', ');
 
-          const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile;
+          const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile || tags['contact:mobile'];
           const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : undefined;
+          const rawWa = tags['contact:whatsapp'] || tags.whatsapp;
+          const whatsapp = rawWa && (ValidationService.validatePhone(String(rawWa)) || String(rawWa).toLowerCase().includes('wa.me'))
+            ? String(rawWa).trim()
+            : undefined;
           const rawWeb = tags.website || tags['contact:website'] || tags.url || tags['contact:url'];
           const cleanWeb = rawWeb && !ValidationService.isSocialOrDirectoryUrl(rawWeb) ? rawWeb.trim() : undefined;
           const rawEmail = tags.email || tags['contact:email'];
@@ -311,8 +329,12 @@ export class OSMSource implements LeadSource {
           const socialLinks: Record<string, string> = {};
           const fb = SocialEnrichmentService.normalizeFacebookUrl(tags['contact:facebook'] || tags.facebook || (rawWeb?.includes('facebook.com') ? rawWeb : undefined));
           const insta = SocialEnrichmentService.normalizeInstagramUrl(tags['contact:instagram'] || tags.instagram || (rawWeb?.includes('instagram.com') ? rawWeb : undefined));
+          const li = SocialEnrichmentService.normalizeLinkedInUrl(tags['contact:linkedin'] || tags.linkedin || (rawWeb?.includes('linkedin.com') ? rawWeb : undefined));
+          const tw = SocialEnrichmentService.normalizeTwitterUrl(tags['contact:twitter'] || tags.twitter || (rawWeb?.includes('twitter.com') || rawWeb?.includes('x.com') ? rawWeb : undefined));
           if (fb) socialLinks.facebook = fb;
           if (insta) socialLinks.instagram = insta;
+          if (li) socialLinks.linkedin = li;
+          if (tw) socialLinks.twitter = tw;
 
           leads.push({
             source: 'osm',
@@ -324,11 +346,19 @@ export class OSMSource implements LeadSource {
             city: resolvedCity,
             address: address || item.display_name || undefined,
             phone,
+            whatsapp,
             website: cleanWeb,
             email,
             latitude: parseFloat(item.lat),
             longitude: parseFloat(item.lon),
-            rawData: { ...item, tags, socialLinks, openingHours: tags.opening_hours }
+            rawData: {
+              ...item,
+              tags,
+              socialLinks,
+              openingHours: tags.opening_hours || tags['contact:opening_hours'],
+              operator: tags.operator,
+              description: tags.description
+            }
           });
 
           if (leads.length >= limit) break;
@@ -388,8 +418,12 @@ export class OSMSource implements LeadSource {
           const address = [street, p.postcode, resolvedCity].filter(Boolean).join(', ');
           const coords = f.geometry?.coordinates || [];
 
-          const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile;
+          const rawPhone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile || tags['contact:mobile'];
           const phone = rawPhone && ValidationService.validatePhone(String(rawPhone)) ? String(rawPhone).trim() : undefined;
+          const rawWa = tags['contact:whatsapp'] || tags.whatsapp;
+          const whatsapp = rawWa && (ValidationService.validatePhone(String(rawWa)) || String(rawWa).toLowerCase().includes('wa.me'))
+            ? String(rawWa).trim()
+            : undefined;
           const rawWeb = tags.website || tags['contact:website'] || tags.url || tags['contact:url'];
           const cleanWeb = rawWeb && !ValidationService.isSocialOrDirectoryUrl(rawWeb) ? rawWeb.trim() : undefined;
           const rawEmail = tags.email || tags['contact:email'];
@@ -398,8 +432,12 @@ export class OSMSource implements LeadSource {
           const socialLinks: Record<string, string> = {};
           const fb = SocialEnrichmentService.normalizeFacebookUrl(tags['contact:facebook'] || tags.facebook || (rawWeb?.includes('facebook.com') ? rawWeb : undefined));
           const insta = SocialEnrichmentService.normalizeInstagramUrl(tags['contact:instagram'] || tags.instagram || (rawWeb?.includes('instagram.com') ? rawWeb : undefined));
+          const li = SocialEnrichmentService.normalizeLinkedInUrl(tags['contact:linkedin'] || tags.linkedin || (rawWeb?.includes('linkedin.com') ? rawWeb : undefined));
+          const tw = SocialEnrichmentService.normalizeTwitterUrl(tags['contact:twitter'] || tags.twitter || (rawWeb?.includes('twitter.com') || rawWeb?.includes('x.com') ? rawWeb : undefined));
           if (fb) socialLinks.facebook = fb;
           if (insta) socialLinks.instagram = insta;
+          if (li) socialLinks.linkedin = li;
+          if (tw) socialLinks.twitter = tw;
 
           leads.push({
             source: 'osm',
@@ -411,11 +449,19 @@ export class OSMSource implements LeadSource {
             city: resolvedCity,
             address: address || (p.city ? `${p.city}, ${p.country || ''}` : undefined),
             phone,
+            whatsapp,
             website: cleanWeb,
             email,
             latitude: coords[1] ? parseFloat(coords[1]) : undefined,
             longitude: coords[0] ? parseFloat(coords[0]) : undefined,
-            rawData: { ...f, tags, socialLinks, openingHours: tags.opening_hours }
+            rawData: {
+              ...f,
+              tags,
+              socialLinks,
+              openingHours: tags.opening_hours || tags['contact:opening_hours'],
+              operator: tags.operator,
+              description: tags.description
+            }
           });
 
           if (leads.length >= limit) break;

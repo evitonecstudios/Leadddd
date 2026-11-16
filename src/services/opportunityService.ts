@@ -35,23 +35,9 @@ export class OpportunityService {
     'restaurant', 'hotel', 'spa', 'beauty', 'hairdresser'
   ];
 
-  static async analyzeLead(leadId: number) {
-    const lead = await db.query.leads.findFirst({
-      where: eq(leads.id, leadId),
-      with: {
-        audits: {
-          orderBy: (audits: any, { desc }: any) => [desc(audits.createdAt)],
-          limit: 1,
-          with: {
-            findings: true
-          }
-        }
-      }
-    });
-
-    if (!lead) throw new Error('Lead not found');
-
-    const audit = lead.audits[0];
+  static computeOpportunities(lead: any, latestAudit?: any) {
+    const leadId = lead.id || 0;
+    const audit = latestAudit || lead.audits?.[0] || null;
     const newOpportunities: any[] = [];
     const categoryLower = (lead.category || '').toLowerCase();
 
@@ -265,7 +251,33 @@ export class OpportunityService {
 
     // Calculate Opportunity Score
     const totalScore = newOpportunities.reduce((sum, opt) => sum + (opt.score || 0), 0);
-    
+    return {
+      leadId,
+      opportunityScore: Math.min(100, totalScore),
+      opportunitiesCount: newOpportunities.length,
+      opportunities: newOpportunities
+    };
+  }
+
+  static async analyzeLead(leadId: number) {
+    const lead = await db.query.leads.findFirst({
+      where: eq(leads.id, leadId),
+      with: {
+        audits: {
+          orderBy: (audits: any, { desc }: any) => [desc(audits.createdAt)],
+          limit: 1,
+          with: {
+            findings: true
+          }
+        }
+      }
+    });
+
+    if (!lead) throw new Error('Lead not found');
+
+    const computed = this.computeOpportunities(lead, lead.audits[0]);
+    const newOpportunities = computed.opportunities;
+
     // Cleanup old opportunities and save new ones
     await db.delete(opportunities).where(eq(opportunities.leadId, leadId));
     
@@ -278,14 +290,9 @@ export class OpportunityService {
 
     // Update lead overall opportunity score
     await db.update(leads)
-      .set({ opportunityScore: Math.min(100, totalScore), updatedAt: new Date() })
+      .set({ opportunityScore: Math.min(100, computed.opportunityScore), updatedAt: new Date() })
       .where(eq(leads.id, leadId));
 
-    return {
-      leadId,
-      opportunityScore: totalScore,
-      opportunitiesCount: newOpportunities.length,
-      opportunities: newOpportunities
-    };
+    return computed;
   }
 }

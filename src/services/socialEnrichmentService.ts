@@ -9,8 +9,10 @@ export interface SocialEnrichmentResult {
   socialUrl?: string;
   platform?: 'facebook' | 'instagram' | 'linkedin' | 'twitter' | 'youtube' | 'tiktok';
   phone?: string;
+  whatsapp?: string;
   email?: string;
   address?: string;
+  openingHours?: string;
   discoveredWebsite?: string;
   bio?: string;
   socialLinks: Record<string, string>;
@@ -159,7 +161,7 @@ export class SocialEnrichmentService {
       }
     }
 
-    // Extract phone / email from search snippets first as fast fallback
+    // Extract phone / whatsapp / email from search snippets first as fast fallback
     for (const snip of searchSnippets) {
       if (!result.phone) {
         const phone = this.extractPhoneFromText(snip.text);
@@ -168,6 +170,19 @@ export class SocialEnrichmentService {
           result.evidence.push({
             field: 'phone',
             value: phone,
+            url: snip.url,
+            method: `${snip.platform?.toUpperCase()} Search Snippet`,
+            confidence: 'MEDIUM'
+          });
+        }
+      }
+      if (!result.whatsapp) {
+        const wa = this.extractWhatsAppFromText(snip.text);
+        if (wa) {
+          result.whatsapp = wa;
+          result.evidence.push({
+            field: 'whatsapp',
+            value: wa,
             url: snip.url,
             method: `${snip.platform?.toUpperCase()} Search Snippet`,
             confidence: 'MEDIUM'
@@ -265,6 +280,22 @@ export class SocialEnrichmentService {
               value: email,
               url: candidate.url,
               method: `${candidate.platform?.toUpperCase()} Public Profile Bio`,
+              confidence: 'HIGH'
+            });
+          }
+        }
+
+        // Extract WhatsApp from public social description or HTML links
+        if (!result.whatsapp) {
+          const htmlWa = res.data.match(/(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=|whatsapp\.com\/send\?phone=)(\+?\d{8,15})/i);
+          const wa = htmlWa?.[1]?.replace('+', '') || this.extractWhatsAppFromText(fullSnippet);
+          if (wa) {
+            result.whatsapp = wa;
+            result.evidence.push({
+              field: 'whatsapp',
+              value: wa,
+              url: candidate.url,
+              method: `${candidate.platform?.toUpperCase()} Public Profile`,
               confidence: 'HIGH'
             });
           }
@@ -417,6 +448,30 @@ export class SocialEnrichmentService {
       result.evidence.push({ field: 'twitter', value: cleanTw, url: cleanTw, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
     }
 
+    const rawWa = tags['contact:whatsapp'] || tags.whatsapp;
+    if (rawWa && !result.whatsapp) {
+      result.whatsapp = String(rawWa).trim();
+      result.evidence.push({ field: 'whatsapp', value: result.whatsapp, url: 'https://www.openstreetmap.org/', method: 'OpenStreetMap contact:whatsapp tag', confidence: 'HIGH' });
+    }
+
+    const rawHours = tags.opening_hours || tags['contact:opening_hours'];
+    if (rawHours && !result.openingHours) {
+      result.openingHours = String(rawHours).trim();
+      result.evidence.push({ field: 'opening_hours', value: result.openingHours, url: 'https://www.openstreetmap.org/', method: 'OpenStreetMap opening_hours tag', confidence: 'HIGH' });
+    }
+
+    const rawYt = tags['contact:youtube'] || tags.youtube;
+    if (rawYt && typeof rawYt === 'string' && rawYt.includes('youtube.com')) {
+      result.socialLinks.youtube = rawYt.split('?')[0].trim();
+      result.evidence.push({ field: 'youtube', value: result.socialLinks.youtube, url: result.socialLinks.youtube, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
+    }
+
+    const rawTt = tags['contact:tiktok'] || tags.tiktok;
+    if (rawTt && typeof rawTt === 'string' && rawTt.includes('tiktok.com')) {
+      result.socialLinks.tiktok = rawTt.split('?')[0].trim();
+      result.evidence.push({ field: 'tiktok', value: result.socialLinks.tiktok, url: result.socialLinks.tiktok, method: 'OpenStreetMap contact tag', confidence: 'HIGH' });
+    }
+
     const phone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || tags.mobile;
     if (phone && !result.phone) {
       result.phone = String(phone).trim();
@@ -443,6 +498,17 @@ export class SocialEnrichmentService {
       'sign up for facebook'
     ];
     return boilerplateKeywords.some(b => lower.includes(b));
+  }
+
+  private static extractWhatsAppFromText(text: string): string | undefined {
+    const waUrl = text.match(/(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=|whatsapp\.com\/send\?phone=)(\+?\d{8,15})/i);
+    if (waUrl?.[1]) return waUrl[1].replace('+', '');
+    const waLabel = text.match(/whatsapp[\s:.-]*(\+?\d[\d\s.-]{7,16}\d)/i);
+    if (waLabel?.[1]) {
+      const digits = waLabel[1].replace(/\D/g, '');
+      if (digits.length >= 8 && digits.length <= 15) return waLabel[1].trim().replace(/\s+/g, ' ');
+    }
+    return undefined;
   }
 
   private static extractPhoneFromText(text: string): string | undefined {

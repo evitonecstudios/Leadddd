@@ -18,7 +18,9 @@ import { AIService } from './services/aiService';
 import { CRMService, LeadStatus } from './services/crmService';
 import { EnrichmentBot } from './services/enrichmentBot';
 import { SocialEnrichmentService } from './services/socialEnrichmentService';
-import { db, hasDbConfig } from './db/index';
+import { db, getDbConfigError, hasDbConfig } from './db/index';
+import { GridPartitionService } from './services/gridPartitionService';
+import { NormalizationService, ValidationService } from './services/leadService';
 import { campaigns, leads, jobs, audits, auditFindings, opportunities, aiAnalyses, activities, notes, tasks, savedViews, systemLogs, requestMetrics, qualityReviews, fieldEvidence } from './db/schema';
 import { eq, and, sql, desc, asc, isNull, isNotNull, ilike, or, gt, lt, gte, lte, ne, inArray } from 'drizzle-orm';
 import Papa from 'papaparse';
@@ -30,7 +32,7 @@ import { ScraplingService } from './services/scraplingService';
 
 export function createServerApp() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '5mb' }));
 
   // PUBLIC DIAGNOSTIC ENDPOINTS
   app.get('/api/health', async (req, res) => {
@@ -38,8 +40,11 @@ export function createServerApp() {
       const { checkDbHealth } = await import('./db/index');
       const dbStatus = await checkDbHealth();
       const scraplingReady = await ScraplingService.isReady();
+      const mode = dbStatus.connected ? 'postgres' : (!hasDbConfig() ? 'zero_config' : 'db_error');
       res.json({ 
-        status: 'ok', 
+        status: 'ok',
+        mode,
+        zeroConfigAvailable: true,
         environment: process.env.NODE_ENV,
         database: dbStatus,
         scrapling: {
@@ -99,8 +104,247 @@ export function createServerApp() {
     }
   });
 
+  // STATELESS ZERO-CONFIG SERVERLESS ENDPOINTS (No DB required - real OpenStreetMap, Scrapling, Audit & AI)
+  app.post('/api/stateless/discover', async (req, res) => {
+    try {
+      const { sourceId = 'osm', criteria = {}, bbox, fallbackNominatim = false } = req.body || {};
+      const source = SourceRegistry.getSource(sourceId);
+      const location = `${criteria.city || ''} ${criteria.country || ''}`.trim();
+
+      let resolvedBbox = bbox || null;
+      if (!resolvedBbox && location && !fallbackNominatim) {
+        try {
+          resolvedBbox = await GridPartitionService.getBoundingBox(location);
+        } catch {}
+      }
+
+      let rawLeads: any[] = [];
+      if (fallbackNominatim && (criteria.city || criteria.country) && criteria.category) {
+        rawLeads = (await (source as any).searchNominatim?.(
+          criteria.category,
+          criteria.city,
+          criteria.country,
+          criteria.limit || 40
+        )) || [];
+      } else {
+        const queryParams: any = { ...criteria, limit: Math.min(Number(criteria.limit) || 60, 200) };
+        if (resolvedBbox) queryParams.bbox = resolvedBbox;
+        rawLeads = await source.search(queryParams);
+      }
+
+      const chainsExcludedCount = rawLeads[0]?.rawData?.chainsExcludedCount || 0;
+      res.json({
+        success: true,
+        data: {
+          leads: rawLeads,
+          chainsExcludedCount,
+          bbox: resolvedBbox
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post('/api/stateless/enrich-batch', async (req, res) => {
+    try {
+      const { rawLeads = [], criteria = {} } = req.body || {};
+      const batch = Array.isArray(rawLeads) ? rawLeads.slice(0, 12) : [];
+      const results = await Promise.all(
+        batch.map(async (rawLead: any) => {
+          try {
+            return await JobService.enrichRawLeadStateless(rawLead, criteria);
+          } catch {
+            return { matched: false, rejected: false };
+          }
+        })
+      );
+      res.json({ success: true, data: results });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post('/api/stateless/scrape', async (req, res) => {
+    try {
+      const { lead } = req.body || {};
+      if (!lead) return res.status(400).json({ success: false, error: 'Lead payload required' });
+
+      const targetUrl = lead.website;
+      const evidence: any[] = [];
+      const leadUpdates: any = { lastEnrichedAt: new Date().toISOString() };
+      const extraNotes: string[] = [];
+      const existingNotes = lead.notes || '';
+      const pushNote = (label: string, val?: string | null) => {
+        if (!val || typeof val !== 'string') return;
+        const clean = val.trim();
+        if (!clean) return;
+        if (existingNotes.toLowerCase().includes(clean.toLowerCase()) || extraNotes.some(n => n.toLowerCase().includes(clean.toLowerCase()))) return;
+        extraNotes.push(`${label} ${clean}`);
+      };
+
+      if (targetUrl && !ValidationService.isSocialOrDirectoryUrl(targetUrl)) {
+        const enriched = await EnrichmentBot.enrich(targetUrl);
+        for (const e of enriched.evidence) {
+          evidence.push({ fieldName: e.field, value: e.value, source: 'OFFICIAL_WEBSITE', sourceUrl: e.url, verified: e.confidence === 'HIGH', confidence: e.confidence });
+        }
+        leadUpdates.enrichmentSource = 'OFFICIAL_WEBSITE';
+        if (!lead.phone && enriched.phone) leadUpdates.phone = NormalizationService.formatDisplayPhone(enriched.phone, lead.country) || enriched.phone;
+        if (!lead.email && enriched.email) leadUpdates.email = enriched.email;
+        if (enriched.address && (!lead.address || lead.address.length < 12)) leadUpdates.address = enriched.address;
+        pushNote('WhatsApp:', enriched.whatsapp);
+        pushNote('Facebook:', enriched.socialLinks?.facebook);
+        pushNote('Instagram:', enriched.socialLinks?.instagram);
+        pushNote('LinkedIn:', enriched.socialLinks?.linkedin);
+        pushNote('Twitter:', enriched.socialLinks?.twitter);
+        pushNote('YouTube:', enriched.socialLinks?.youtube);
+        pushNote('TikTok:', enriched.socialLinks?.tiktok);
+        pushNote('Hours:', enriched.openingHours);
+        pushNote('Legal Name:', enriched.legalName);
+        pushNote('Dirigeant/Manager:', enriched.managerName);
+        pushNote('Legal ID:', enriched.siretOrVat);
+        pushNote('Description:', enriched.tagline);
+      } else {
+        const rawTags = lead.rawData?.tags || lead.rawData || {};
+        const socialResult = await SocialEnrichmentService.enrichFromSocialMedia(lead.companyName, lead.city, lead.country, rawTags);
+        for (const e of socialResult.evidence) {
+          evidence.push({ fieldName: e.field, value: e.value, source: socialResult.platform ? `${socialResult.platform.toUpperCase()}_PROFILE` : 'SOCIAL_PRESENCE', sourceUrl: e.url, verified: e.confidence === 'HIGH', confidence: e.confidence });
+        }
+        leadUpdates.enrichmentSource = 'SOCIAL_MEDIA';
+        if (socialResult.discoveredWebsite && !lead.website) {
+          leadUpdates.website = socialResult.discoveredWebsite;
+          leadUpdates.websiteStatus = 'verified';
+          leadUpdates.websiteConfidence = 'HIGH';
+        }
+        if (!lead.phone && socialResult.phone) leadUpdates.phone = NormalizationService.formatDisplayPhone(socialResult.phone, lead.country) || socialResult.phone;
+        if (!lead.email && socialResult.email) leadUpdates.email = socialResult.email;
+        if (socialResult.address && (!lead.address || lead.address.length < 12)) leadUpdates.address = socialResult.address;
+        pushNote('WhatsApp:', socialResult.whatsapp);
+        pushNote('Facebook:', socialResult.socialLinks?.facebook);
+        pushNote('Instagram:', socialResult.socialLinks?.instagram);
+        pushNote('LinkedIn:', socialResult.socialLinks?.linkedin);
+        pushNote('Twitter:', socialResult.socialLinks?.twitter);
+        pushNote('YouTube:', socialResult.socialLinks?.youtube);
+        pushNote('TikTok:', socialResult.socialLinks?.tiktok);
+        pushNote('Hours:', socialResult.openingHours);
+        pushNote('Bio:', socialResult.bio);
+      }
+
+      if (extraNotes.length > 0) {
+        leadUpdates.notes = existingNotes ? `${existingNotes}\n${extraNotes.join('\n')}` : extraNotes.join('\n');
+      }
+
+      const merged = { ...lead, ...leadUpdates };
+      const quality = NormalizationService.computeDataQuality(merged);
+      leadUpdates.dataConfidence = quality.confidence;
+      leadUpdates.opportunityScore = Math.max(lead.opportunityScore || 0, quality.score);
+
+      res.json({ success: true, data: { leadUpdates, evidence, evidenceCount: evidence.length } });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post('/api/stateless/audit', async (req, res) => {
+    try {
+      const { lead, language = 'fr', generateAi = true } = req.body || {};
+      if (!lead) return res.status(400).json({ success: false, error: 'Lead payload required' });
+
+      let auditResult: any = null;
+      const leadUpdates: any = {};
+
+      if (lead.website && !ValidationService.isSocialOrDirectoryUrl(lead.website)) {
+        auditResult = await WebsiteService.performAuditStateless(lead.website);
+        leadUpdates.auditScore = auditResult.overallScore;
+        if (auditResult.isParked) {
+          leadUpdates.websiteStatus = 'not_detected';
+          leadUpdates.websiteExists = false;
+        }
+      }
+
+      const oppResult = OpportunityService.computeOpportunities({ ...lead, ...leadUpdates }, auditResult);
+      leadUpdates.opportunityScore = Math.max(lead.opportunityScore || 0, oppResult.opportunityScore);
+
+      let aiAnalysis: any = null;
+      if (generateAi) {
+        try {
+          const aiInput = {
+            lead: {
+              companyName: lead.companyName,
+              category: lead.category || null,
+              city: lead.city || null,
+              country: lead.country || null,
+              address: lead.address || null,
+              phone: lead.phone || null,
+              email: lead.email || null,
+              website: lead.website || null,
+              source: lead.source || null
+            },
+            website: {
+              status: leadUpdates.websiteStatus || lead.websiteStatus || (lead.website ? 'verified' : 'not_detected'),
+              url: lead.website || null,
+              finalUrl: auditResult?.finalUrl || lead.website || null
+            },
+            audit: {
+              overallScore: auditResult?.overallScore ?? 40,
+              technicalScore: auditResult?.technicalScore ?? null,
+              seoScore: auditResult?.seoScore ?? null,
+              mobileScore: auditResult?.mobileScore ?? null,
+              performanceScore: auditResult?.performanceScore ?? null,
+              conversionScore: auditResult?.conversionScore ?? null,
+              localSeoScore: auditResult?.localSeoScore ?? null
+            },
+            findings: (auditResult?.findings || []).map((f: any) => ({
+              category: f.category,
+              severity: f.severity,
+              title: f.title,
+              evidence: f.evidence
+            })),
+            opportunities: (oppResult.opportunities || []).map((o: any) => ({
+              type: o.type,
+              title: o.title,
+              description: o.description,
+              evidence: o.evidence
+            }))
+          };
+          aiAnalysis = await AIService.generateAnalysisStateless(aiInput, language, 'consultative');
+        } catch {}
+      }
+
+      res.json({
+        success: true,
+        data: {
+          leadUpdates,
+          audit: auditResult,
+          opportunities: oppResult.opportunities,
+          opportunityScore: oppResult.opportunityScore,
+          aiAnalysis
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post('/api/stateless/ai', async (req, res) => {
+    try {
+      const { input, language = 'fr', tone = 'consultative' } = req.body || {};
+      if (!input) return res.status(400).json({ success: false, error: 'AI input required' });
+      const result = await AIService.generateAnalysisStateless(input, language, tone);
+      res.json({ success: true, data: { ...result, language, tone } });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   app.use('/api', (req, res, next) => {
-    if (req.path === '/health' || req.path === '/debug/db' || req.path === '/debug/init-db' || req.path === '/search-providers') return next();
+    if (
+      req.path === '/health' ||
+      req.path === '/debug/db' ||
+      req.path === '/debug/init-db' ||
+      req.path === '/search-providers' ||
+      req.path.startsWith('/stateless/')
+    ) return next();
     requireAuth(req as AuthRequest, res, next);
   });
 
@@ -109,11 +353,12 @@ export function createServerApp() {
       if (!req.user?.uid) {
         return res.status(401).json({ success: false, error: 'Unauthorized: User identity not found in token' });
       }
-      if (!hasDbConfig()) {
+      const cfgErr = getDbConfigError();
+      if (cfgErr) {
         return res.status(503).json({
           success: false,
           error: 'Database not configured',
-          message: 'DATABASE_URL environment variable is not set in this runtime.',
+          message: cfgErr,
           db_connected: false
         });
       }
@@ -133,11 +378,12 @@ export function createServerApp() {
   app.get('/api/dashboard/stats', async (req: AuthRequest, res) => {
     try {
       if (!req.user?.uid) return res.status(401).json({ success: false, error: 'Unauthorized' });
-      if (!hasDbConfig()) {
+      const cfgErr = getDbConfigError();
+      if (cfgErr) {
         return res.status(503).json({
           success: false,
           error: 'Failed to load dashboard stats',
-          message: 'DATABASE_URL is not configured in this runtime.'
+          message: cfgErr
         });
       }
       console.log(`[DASHBOARD] Fetching stats for user UID: ${req.user.uid}`);
@@ -474,35 +720,10 @@ export function createServerApp() {
       });
     } catch (error: any) {
       console.error('[API-FILTER-OPTIONS] Error:', error);
-      res.json({ 
-        success: true, 
-        data: {
-          cities: [
-            { city: 'Paris', count: 12 },
-            { city: 'Genève', count: 8 },
-            { city: 'Zürich', count: 8 },
-            { city: 'Bern', count: 4 },
-            { city: 'Lausanne', count: 2 }
-          ],
-          categories: [
-            { category: 'plumber', count: 10 },
-            { category: 'car mechanic', count: 8 },
-            { category: 'phone repair', count: 6 },
-            { category: 'bakery', count: 5 },
-            { category: 'electrician', count: 3 },
-            { category: 'craft', count: 2 }
-          ],
-          statusCounts: [{ status: 'NEW', count: 34 }],
-          summary: {
-            total: 34,
-            withValidContact: 34,
-            withPhone: 34,
-            withEmail: 14,
-            withWebsite: 34,
-            noWebsite: 0,
-            highOpportunity: 18
-          }
-        }
+      res.status(503).json({
+        success: false,
+        error: error.message || 'Database connection unavailable',
+        isDbError: true
       });
     }
   });
@@ -565,93 +786,10 @@ export function createServerApp() {
 
     } catch (error: any) {
       console.error('[API-LEADS] Fetch failure:', error);
-      const fallbackList = [
-        {
-          id: 529,
-          companyName: 'Guy Rouez Chauffage Sanitaire',
-          category: 'plumber',
-          city: 'Montrouge',
-          country: 'France',
-          address: '5 avenue de Verdun 92120',
-          phone: '+33 1 46 57 01 80',
-          website: 'https://www.rouez-chauffage-sanitaires-92.fr/',
-          email: 'contact@rouez-chauffage.fr',
-          dataConfidence: 'HIGH',
-          websiteStatus: 'verified',
-          auditScore: 76,
-          opportunityScore: 75,
-          leadStatus: 'NEW'
-        },
-        {
-          id: 530,
-          companyName: 'Plomberie De La Source',
-          category: 'plumber',
-          city: 'Seynod',
-          country: 'France',
-          address: 'Route des Creuses 287 74600',
-          phone: '+33 4 50 10 86 46',
-          website: 'http://www.plomberiedelasource.com',
-          dataConfidence: 'HIGH',
-          websiteStatus: 'verified',
-          auditScore: 68,
-          opportunityScore: 70,
-          leadStatus: 'NEW'
-        },
-        {
-          id: 531,
-          companyName: 'Lamti Plomberie & Énergie',
-          category: 'plumber',
-          city: 'Irigny',
-          country: 'France',
-          address: 'Rue de la Ferme Laval 65 69540',
-          phone: '+33 7 81 03 96 36',
-          website: 'https://lamti-plomberie-energie.fr',
-          dataConfidence: 'HIGH',
-          websiteStatus: 'verified',
-          auditScore: 72,
-          opportunityScore: 80,
-          leadStatus: 'NEW'
-        },
-        {
-          id: 532,
-          companyName: 'Art Computer Genève',
-          category: 'phone repair',
-          city: 'Genève',
-          country: 'Suisse',
-          address: 'Rue de Coutance 3 1201',
-          phone: '+41 848 278 278',
-          website: 'https://artcomputer.ch/',
-          dataConfidence: 'HIGH',
-          websiteStatus: 'verified',
-          auditScore: 84,
-          opportunityScore: 62,
-          leadStatus: 'NEW'
-        },
-        {
-          id: 533,
-          companyName: 'Imfeld Garage',
-          category: 'car mechanic',
-          city: 'Zürich',
-          country: 'Suisse',
-          address: 'Imfeldstrasse 11 8037',
-          phone: '+41 44 360 82 82',
-          website: 'https://remi.ch',
-          dataConfidence: 'HIGH',
-          websiteStatus: 'verified',
-          auditScore: 75,
-          opportunityScore: 65,
-          leadStatus: 'NEW'
-        }
-      ];
-      res.json({ 
-        success: true, 
-        data: fallbackList,
-        total: fallbackList.length,
-        page: 1,
-        limit: 50,
-        totalPages: 1,
-        isFallback: true,
-        dbError: error.message 
+      res.status(503).json({
+        success: false,
+        error: error.message || 'Database connection unavailable',
+        isDbError: true
       });
     }
   });

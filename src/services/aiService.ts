@@ -206,6 +206,43 @@ export class AIService {
     return fallbackResult;
   }
 
+  static async generateAnalysisStateless(input: AIInput, language = 'fr', tone = 'professional') {
+    const ai = getGeminiClient();
+    if (!ai) {
+      return this.generateFallbackAnalysis(input, language, tone);
+    }
+
+    const prompt = this.buildPrompt(input, language, tone);
+    let modelIndex = AI_MODELS.indexOf(this.DEFAULT_MODEL as (typeof AI_MODELS)[number]);
+    if (modelIndex < 0) modelIndex = 0;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const currentModel = AI_MODELS[modelIndex] || this.DEFAULT_MODEL;
+      try {
+        const response = await ai.models.generateContent({
+          model: currentModel,
+          contents: prompt,
+          config: { responseMimeType: 'application/json' }
+        });
+        const rawText = response.text;
+        if (!rawText) throw new Error('Empty response from Gemini');
+        const cleanedText = rawText.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
+        return JSON.parse(cleanedText);
+      } catch (error: any) {
+        const msg = error?.message || String(error);
+        const isNotFound = msg.includes('404') || error?.status === 404 || msg.includes('NOT_FOUND');
+        if (isNotFound && modelIndex < AI_MODELS.length - 1) {
+          modelIndex++;
+          this.DEFAULT_MODEL = AI_MODELS[modelIndex];
+          continue;
+        }
+        break;
+      }
+    }
+
+    return this.generateFallbackAnalysis(input, language, tone);
+  }
+
   private static calculateHash(input: AIInput, language: string, tone: string): string {
     const data = JSON.stringify({ input, language, tone, version: this.PROMPT_VERSION });
     return crypto.createHash('md5').update(data).digest('hex');
